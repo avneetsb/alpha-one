@@ -1,0 +1,34 @@
+{
+    "name": "trae-projects/php-trading-platform",
+    "description": "CLI based trading platform for Indian exchanges",
+    "type": "project",
+    "require": {
+        "php": "^8.2",
+        "illuminate/database": "^10.0",
+        "predis/predis": "^2.0",
+        "monolog/monolog": "^3.0",
+        "illuminate/queue": "^10.0",
+        "illuminate/redis": "^10.0",
+        "illuminate/events": "^10.0",
+        "symfony/console": "^6.0",
+        "vlucas/phpdotenv": "^5.5",
+        "guzzlehttp/guzzle": "^7.0",
+        "textalk/websocket": "^1.5",
+        "league/csv": "^9.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "TradingPlatform\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Avneet Singh Bindra",
+            "email": "avneetbindra180691@gmail.com"
+        }
+    ],
+    "minimum-stability": "stable"
+}

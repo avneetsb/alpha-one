@@ -1,0 +1,97 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Trading Platform Console Entrypoint
+ *
+ * Bootstrap script for CLI operations using Symfony Console.
+ * Loads environment variables, initializes infrastructure (database, logger),
+ * and registers application commands and workers.
+ *
+ * Example usage:
+ * - List available commands: `php bin/console list`
+ * - Show command help: `php bin/console <command> --help`
+ * - Run migrations: `php bin/console system:migrate`
+ * - Refresh instruments: `php bin/console instrument:refresh`
+ * - Subscribe ticks: `php bin/console marketdata:subscribe --instruments=RELIANCE,TCS`
+ * - Place order: `php bin/console order:place --symbol=RELIANCE --qty=100 --price=2500.50 --side=BUY`
+ * - Start queue worker: `php bin/console worker:queue`
+ * - Start tick ingestion worker: `php bin/console worker:ticks`
+ * - Run reconciliation: `php bin/console reconciliation:run --scope=orders --broker=dhan`
+ * - Optimize strategy: `php bin/console optimization:optimize --strategy=RSI_Momentum --generations=50`
+ *
+ * Environment:
+ * - Reads `.env` from project root to configure database, broker, logging, queue.
+ * - Non-fatal DB bootstrap: allows commands that don't need DB to still run.
+ *
+ * Adding a new command:
+ * - Implement `Symfony\Component\Console\Command\Command` under `src/Application/Commands/...`
+ * - Register it below via `$application->add(new \Namespace\YourCommand());`
+ */
+
+require __DIR__ . '/../vendor/autoload.php';
+
+use Symfony\Component\Console\Application;
+use Dotenv\Dotenv;
+use TradingPlatform\Infrastructure\Database\DatabaseConnection;
+use TradingPlatform\Infrastructure\Logger\LoggerService;
+
+// Load environment variables
+
+/**
+ * Load environment variables from project root (.env).
+ * Uses Dotenv::safeLoad to avoid throwing if .env is missing.
+ */
+$dotenv = Dotenv::createImmutable(__DIR__ . '/..');
+$dotenv->safeLoad();
+
+// Bootstrap Database
+/**
+ * Bootstrap database connection.
+ * If connection fails, log to STDERR and continue; some commands are independent
+ * (e.g., help, configuration inspection, or certain workers).
+ */
+try {
+    DatabaseConnection::getInstance();
+} catch (\Exception $e) {
+    fwrite(STDERR, "Database connection failed: " . $e->getMessage() . PHP_EOL);
+    // We continue even if DB fails, as some commands might not need it
+}
+
+// Initialize Logger
+/**
+ * Initialize application logger according to config/logging.php.
+ */
+$logger = LoggerService::getLogger();
+
+$application = new Application('Trading Platform', '1.0.0');
+
+// Register Commands
+/**
+ * Register application commands and long-running workers.
+ * Grouped by domain to aid discovery.
+ */
+$application->add(new \TradingPlatform\Application\Commands\System\MigrateCommand());
+$application->add(new \TradingPlatform\Application\Commands\Instrument\RefreshInstrumentsCommand());
+$application->add(new \TradingPlatform\Application\Commands\Instrument\ListInstrumentsCommand());
+$application->add(new \TradingPlatform\Application\Commands\MarketData\SubscribeTicksCommand());
+$application->add(new \TradingPlatform\Application\Commands\MarketData\TickStatusCommand());
+$application->add(new \TradingPlatform\Application\Workers\TickIngestionWorker());
+$application->add(new \TradingPlatform\Application\Commands\Order\PlaceOrderCommand());
+$application->add(new \TradingPlatform\Application\Commands\Order\CancelOrderCommand());
+$application->add(new \TradingPlatform\Application\Commands\Historical\FetchHistoricalCommand());
+$application->add(new \TradingPlatform\Application\Commands\Candle\AggregateCandlesCommand());
+$application->add(new \TradingPlatform\Application\Commands\Portfolio\ListPositionsCommand());
+$application->add(new \TradingPlatform\Application\Workers\QueueWorkerCommand());
+$application->add(new \TradingPlatform\Application\Commands\System\TestQueueCommand());
+$application->add(new \TradingPlatform\Application\Commands\Strategy\TestStrategyCommand());
+$application->add(new \TradingPlatform\Application\Commands\Reporting\GenerateReportCommand());
+$application->add(new \TradingPlatform\Application\Commands\Reconciliation\RunReconciliationCommand());
+$application->add(new \TradingPlatform\Application\Commands\System\HealthCheckCommand());
+$application->add(new \TradingPlatform\Application\Workers\LoggingWorkerCommand());
+$application->add(new \TradingPlatform\Application\Commands\Monitoring\DashboardCommand());
+$application->add(new \TradingPlatform\Application\Commands\Optimization\OptimizeStrategyCommand());
+
+/**
+ * Run the console application.
+ */
+$application->run();

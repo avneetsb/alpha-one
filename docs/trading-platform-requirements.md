@@ -1,0 +1,1689 @@
+# 1. CLI Trading Platform Requirements
+
+## 1.1. Summary
+
+- CLI based trading platform for Indian exchanges (NSE/BSE/MCX).
+- Backtesting and live trading platform for Indian exchanges (NSE/BSE/MCX).
+- Hexagonal architecture: Ports/Adapters, DTOs/Value Objects, strong idempotency/outbox.
+- End-to-end CLI and API, consistent response envelope, RBAC, rate limiting.
+- Operational rigor: SLOs, runbooks, observability, migrations, testing matrix.
+- Multi-Broker Support via Adapter Pattern
+
+# 2. Broker Support
+
+## 2.1. Dhan with Live URL and Sandbox URL(testing / development environments) support
+
+# 3. Requirements
+
+## 3.1. Observability & Logging
+
+- Centralised Logging with Standardized Formats (all logging should be done async using workers)
+    - Logging should be strictly done via Background Workers
+    - Logging should be propagated to both Console and Database
+    - Logging should be verbose
+    - Logging should be done in batches of 1 second
+    - Structured JSON logs with mandatory fields
+    - Standardized log formats for multiple scenarios with context-specific fields
+    - Correlation IDs propagated across queues/workers; every transactional operation carries a `trace_id`
+    - Log levels and sampling: sample debug at high volume paths; always log errors and transactional events
+    - Database retention policy: hot store 30 days, cold archive beyond; configurable per environment
+    - Batch size caps and backpressure: max batch size configurable; workers throttle on DB write latency p95 breach
+    - Validation: ensure no secrets or API keys ever appear in logs via sanitizer
+    - Log parsing and processing pipeline for real-time analytics and alerting
+- Log Processing Pipeline
+    - Real-time parsing with structured field extraction
+    - Centralized log aggregation with broker_id partitioning
+    - Automated alerting based on error patterns and thresholds
+    - Log correlation across distributed components using trace_id
+    - Performance metrics extraction from timing logs
+    - Security event detection and alerting
+    - Compliance audit trail generation
+    - Log analytics dashboard with filtering by component, broker, instrument
+- Scope
+    - Covers all services and workers, including transactional events, retries, recon, and strategy actions
+    - Single schema for logs across console and DB to allow uniform querying and dashboards
+    - Multi-scenario standardized formats for consistent parsing and analysis
+- Inputs/Outputs
+    - Inputs: worker events, API calls, CLI commands, broker responses, queue state changes
+    - Outputs: console stream, DB log table, optional external sink via plugin
+- Configuration
+    - `LOG_LEVEL`, `LOG_BATCH_MS`, `LOG_SAMPLING_DEBUG_PCT`, `LOG_DB_RETENTION_DAYS`, `LOG_SANITIZER_ENABLED`
+- SLOs
+    - p95 time from event to persisted log ≤ 500ms, p99 ≤ 1s
+    - Lossless for `error` level; debug sampling may drop by policy
+- Failure Modes & Recovery
+    - DB down: buffer logs up to max backlog, fall back to console with warning; drop debug if backlog exceeds limit
+    - Sanitizer failure: block logging of sensitive payloads; emit sanitized summaries
+- Acceptance & Tests
+    - Correlation IDs present in 100% transactional logs and traced across boundaries
+    - Secret scanning finds no sensitive values in logs
+    - Retention/archival jobs enforce policy; sampling behaves per configuration
+
+## 3.2. Caching
+
+- Centralised Caching (single Redis based cache across the application)
+    - Read-Through Pattern for Database Queries
+    - Write-Behind Pattern when writing to Database via Queues using Background Workers
+    - Automatic Cache Invalidation (using TTL or on update to underlying data)
+    - Key design: namespaced keys `app:domain:entity:id` with versioning to support schema evolution
+    - TTL policies per entity (ticks: seconds, instruments: hours, configs: days) with proactive refresh on stale reads
+    - Stampede protection via request coalescing and per-key locks; negative caching for known-missing records
+    - Consistency: write-behind confirms persistence before cache update; fallback read-through on write failures
+    - Redis HA: Sentinel/Cluster with health checks; circuit breaker trips to DB on cache unavailability
+- Monitoring: `cache.hit_ratio`, `cache.evictions`, `cache.latency.p95`; alert on drastic hit ratio drops
+- Scope
+    - Read-through for metadata and positions; write-behind for computed aggregates
+- Configuration
+    - `REDIS_URL`, `CACHE_NAMESPACE_VERSION`, `CACHE_TTL_INSTRUMENTS`, `CACHE_TTL_TICKS`, `CACHE_TTL_CONFIGS`
+- SLOs
+    - p95 `GET` latency ≤ 10ms; hit ratio ≥ 0.8 for instrument and configuration reads
+- Failure Modes & Recovery
+    - Redis unavailable: circuit breaker opens; system uses DB reads and disables write-behind temporarily
+- Acceptance & Tests
+    - Stampede protection validated under concurrent misses; negative caching prevents repeated costly lookups
+
+## 3.3. Queue Management
+
+- Enhanced Queue Architecture with Guardrails
+    - Multi-tier queue system with priority lanes and resource isolation
+    - Queue using REDIS QUEUES with Redis Cluster for high availability
+    - Advanced message envelope with enhanced metadata
+    - Queue guardrails: message size limits, rate limiting per broker, circuit breakers for failing queues
+    - Resource-based queue isolation: separate queue clusters for high-volume brokers
+    - Dynamic queue creation with automatic cleanup and lifecycle management
+    - Queue federation for cross-broker message routing and load balancing
+- Queue Performance & Scaling
+    - **Auto-scaling Policies**: Based on queue depth, processing lag, and error rates
+    - **Predictive Scaling**: ML-based scaling using historical patterns and market hours
+    - **Burst Handling**: Temporary queue expansion during market open/close spikes
+    - **Resource Pools**: Worker pools with automatic sizing based on queue load
+    - **Load Balancing**: Intelligent message distribution across worker instances
+    - **Backpressure Management**: Dynamic rate limiting to prevent system overload
+- Queue Guardrails & Protection
+    - **Message Size Limits**: Configurable max message size with automatic chunking for large payloads
+    - **Rate Limiting**: Per-broker rate limits with burst allowances and smoothing algorithms
+    - **Circuit Breakers**: Automatic circuit breaking for consistently failing queues
+    - **Poison Message Handling**: Advanced poison message detection with quarantine queues
+    - **Duplicate Detection**: Enhanced deduplication using message fingerprints and idempotency keys
+    - **Resource Quotas**: Per-broker queue resource quotas to prevent resource exhaustion
+- Priority Queue Management
+    - **Multi-level Priority**: CRITICAL > HIGH > NORMAL > LOW > BACKGROUND priority levels
+    - **Priority Inheritance**: Automatic priority elevation for dependent operations
+    - **Priority Aging**: Prevents priority starvation with time-based priority increases
+    - **Broker Fairness**: Fair scheduling across brokers while respecting priorities
+    - **Instrument Ordering**: Strict ordering preserved per instrument within priority levels
+- Advanced Retry & Failure Handling
+    - **Exponential Backoff with Decorr Jitter**: Prevents thundering herd problems
+    - **Adaptive Retry Policies**: Dynamic adjustment based on error types and success rates
+    - **Dead Letter Queue (DLQ) Enhancement**: Multiple DLQ tiers based on failure reasons
+    - **Retry Budgets**: Per-broker retry budgets to prevent retry storms
+    - **Failure Classification**: Automatic error categorization with appropriate retry strategies
+    - **DLQ Replay**: Safe replay of DLQ messages with validation and monitoring
+- Queue Monitoring & Observability
+    - **Enhanced Metrics**:
+        - `queue_depth_messages{queue_name, broker_id, priority}`
+        - `queue_processing_latency_seconds{queue_name, broker_id, status}`
+        - `queue_error_rate{queue_name, broker_id, error_type}`
+        - `queue_throughput_messages_per_second{queue_name, broker_id}`
+        - `queue_retry_attempts{queue_name, broker_id, attempt_number}`
+        - `queue_dlq_depth_messages{queue_name, broker_id, failure_reason}`
+    - **Real-time Alerting**: Immediate alerts for queue anomalies and SLO breaches
+    - **Performance Analytics**: Queue performance trends and bottleneck identification
+    - **Capacity Planning**: Predictive analytics for queue capacity requirements
+- Queue Processing Optimization
+    - **Batch Processing**: Configurable batch sizes for high-throughput scenarios
+    - **Parallel Processing**: Multi-threaded processing with configurable concurrency
+    - **Message Prefetching**: Intelligent prefetch to optimize worker utilization
+    - **Processing Timeouts**: Adaptive timeouts based on message type and historical data
+    - **Resource-aware Processing**: Dynamic processing limits based on system resources
+    - **Message Compression**: Automatic compression for large messages to reduce memory usage
+- Queue Security & Isolation
+    - **Message Encryption**: Optional encryption for sensitive message payloads
+    - **Access Control**: RBAC-based queue access with audit logging
+    - **Message Sanitization**: Automatic sanitization of sensitive data in messages
+    - **Audit Trail**: Complete message lifecycle tracking for compliance
+- Scope
+    - Covers ticks, candles, orders, reconciliation, logging/monitoring lanes with enterprise-grade reliability
+    - Multi-broker queue isolation with fair resource allocation
+    - High-performance processing with automatic scaling and protection
+- Configuration
+    - `QUEUE_MAX_ATTEMPTS`, `QUEUE_BACKOFF_BASE_MS`, `QUEUE_JITTER_PCT`, `DLQ_RETENTION_DAYS`, `QUEUE_PRIORITY_WEIGHTS`
+    - `QUEUE_MESSAGE_SIZE_LIMIT_BYTES`, `QUEUE_RATE_LIMIT_PER_SECOND`, `QUEUE_CIRCUIT_BREAKER_THRESHOLD`
+    - `QUEUE_AUTOSCALE_ENABLED`, `QUEUE_PREDICTIVE_SCALING_ENABLED`, `QUEUE_BURST_CAPACITY_MULTIPLIER`
+    - `QUEUE_RESOURCE_QUOTA_PER_BROKER`, `QUEUE_PROCESSING_TIMEOUT_MS`, `QUEUE_BATCH_SIZE`
+    - `QUEUE_ENCRYPTION_ENABLED`, `QUEUE_COMPRESSION_THRESHOLD_BYTES`, `QUEUE_AUDIT_ENABLED`
+- SLOs
+    - Transactional lanes p95 lag ≤ 500ms; monitoring/logging lanes p95 lag ≤ 2s
+    - Queue processing p99 latency ≤ 100ms for transactional messages
+    - Message loss rate ≤ 0.001% with proper acknowledgment
+    - Queue availability ≥ 99.9% with automatic failover
+    - Auto-scaling response time ≤ 30s for load changes
+- Failure Modes & Recovery
+    - **Queue Unavailability**: Automatic failover to backup queue instances
+    - **Message Loss**: Persistent message storage with write-ahead logging
+    - **Processing Failures**: Graceful degradation with circuit breaker patterns
+    - **Resource Exhaustion**: Backpressure activation with load shedding
+    - **Network Partitions**: Split-brain prevention with quorum-based decisions
+    - **DLQ Overflow**: Automatic expansion with administrative alerting
+- Acceptance & Tests
+    - Queue processing maintains ordering guarantees under high load
+    - Auto-scaling responds within 30s to load changes
+    - Poison messages are correctly identified and quarantined
+    - DLQ replay processes messages safely with validation
+    - Circuit breakers activate appropriately for failing queues
+    - Message deduplication prevents duplicate processing
+    - Queue resource quotas prevent broker resource exhaustion
+- Failure Modes & Recovery
+    - Poison messages detected via repeated failures; routed to DLQ with reason; idempotency prevents duplication
+- Acceptance & Tests
+    - Redelivery detection verified; DLQ replay and purge flows work; envelope fields populated consistently
+
+## 3.4. Worker Management
+
+- Centralised Worker Management
+    - Background Workers
+    - Auto restart workers on failure
+    - Each worker should have 2 instances i.e. 1 Primary and 1 Secondary (fallback in case primary worker gets terminated)
+    - Transactional (orders, tick data consumption, candle aggregation, dhan-connect related tasks) workers are always highest priority
+    - Monitoring workers are medium priority
+    - Logging workers are lowest priority
+    - Health checks: heartbeat every 1s
+    - Leader election for coordination tasks (subscriptions, reconciliation scheduling); automatic failover
+    - Concurrency: instrument-level serialization to avoid race conditions; cross-instrument concurrency enabled
+    - Resource limits: CPU/memory caps; backpressure propagation to upstream queues on overload
+    - Crash resilience: restart with last persisted offsets and subscriptions; warm-up phase before resuming full load
+    - Deployment: rolling restarts; canary workers for new versions; feature flags gate new behavior
+- Scope
+    - Long-running background workers for ingestion, processing, and trading
+- Configuration
+    - `WORKER_CONCURRENCY`, `WORKER_HEARTBEAT_MS`, `WORKER_AUTO_RESTART`, `WORKER_MEM_LIMIT_MB`, `WORKER_CPU_LIMIT`
+- SLOs
+    - Availability for transactional workers ≥ 99.9%; restart time ≤ 5s on crash
+- Failure Modes & Recovery
+    - Crash loops: exponential backoff; hot instrument isolation to prevent repeated overload
+- Acceptance & Tests
+    - Heartbeat monitoring catches failures; leader election transfers responsibilities within 2s
+
+## 3.5. Data Storage
+
+- Centralised Database
+    - DB store for Logging, Monitoring and Transactions
+    - Different Tables for Logging, Monitoring Metrics, Instruments
+    - Different Tables to capture Tick / Candle data per Instrument
+    - Different Tables to capture Orders, Positions, Trades, Holdings, Strategy
+    - All tables should be appropriately indexed for best query read/write performance
+    - Migrations for creation of Tables and Database (if not exists when running application)
+    - Schema guidelines: additive migrations only; use composite indexes `(instrument_id, ts)` for time-series; partition high-volume tables by instrument or date
+    - Isolation levels: transactional operations use `READ COMMITTED` or stricter; outbox pattern for cross-service reliability
+    - Connection pooling with caps per worker class; retry transient errors with idempotent writes
+    - Data lifecycle: retention and archival policies per table; checksum columns for candles/ticks
+    - Validation triggers for referential integrity across orders/positions/trades; enforce quantity/avg price invariants
+- Scope
+    - Primary relational store for all transactional and analytical data; time-series oriented for ticks/candles
+- Configuration
+    - `DB_POOL_MAX`, `DB_CONN_TIMEOUT_MS`, `DB_PARTITIONING_STRATEGY`, `DB_CHECKSUM_ENABLE`
+- SLOs
+    - p95 write latency for transactional rows ≤ 50ms; read latency for indexed queries ≤ 20ms
+- Failure Modes & Recovery
+    - Connection saturation: throttle upstream; retry idempotent writes; fail fast non-idempotent
+- Acceptance & Tests
+    - Migrations are additive and reversible; indices chosen eliminate full scans on hot paths
+
+## 3.6. Broker Integration
+
+- Full Suite implementation for dhan SDK
+    - Auth should Strictly be done using API KEY and SECRET, which are stored directly in ENV
+    - Implement robust auto-reconnect logic from Dhan sdk
+    - Rate limiting: centralized limiter per API category (quotes, orders); respect broker-specific quotas
+    - Error taxonomy mapping to internal codes; retries only for safe/idempotent operations
+    - Sandbox/staging support for contract tests; feature flags for broker-specific behaviors
+    - WS heartbeat monitoring and latency tracking; automatic resubscribe on reconnect
+- Scope
+    - REST and WS integration with broker APIs for quotes, orders, margins, positions
+- Configuration
+    - `BROKER_API_KEY`, `BROKER_API_SECRET`, `BROKER_RATE_LIMITS`, `BROKER_WS_HEARTBEAT_MS`, `BROKER_ENV`
+- SLOs
+    - p95 REST call latency meets broker thresholds; reconnect within 3s on WS drops
+- Acceptance & Tests
+    - Contract tests against sandbox/staging; error taxonomy mapped; retries limited to idempotent calls
+- Architecture (Ports/Adapters)
+    - Define `BrokerPort` interface for core capabilities (orders, quotes, margins, positions)
+    - Implement `dhanAdapter` adhering to `BrokerPort`; future adapters for other brokers
+    - DTOs for transport, mappers to domain entities/value objects; adapter capabilities toggled via feature flags
+
+### 3.7. Adapter Capability Matrix
+
+- Capabilities
+    - Orders (REST), Market Data (WS), Historical OHLCV (REST), Margins/Positions (REST), GTT, Postbacks/Webhooks
+- `dhanAdapter`
+    - Orders: yes; Market Data: yes; Historical: yes; Margins/Positions: yes; GTT/Postbacks: yes
+    - Rate limits: configured via `BROKER_RATE_LIMITS`; WS heartbeat via `BROKER_WS_HEARTBEAT_MS`
+- `MockBrokerAdapter`
+    - Orders: deterministic responses; Market Data: simulated ticks; Historical: fixture-backed; Margins/Positions: simulated
+    - GTT/Postbacks: simulated callbacks; error injection via flags; strict contract parity with `BrokerPort`
+
+## 3.8. Instrument Management
+
+- Centralized Instrument Management with Symbol Standardization
+    - Master instrument registry with normalized symbols across all brokers
+    - Symbol mapping layer to handle broker-specific presentation formats
+    - Exchange-controlled instruments with broker-specific presentation customization
+    - Automatic instrument discovery and synchronization across connected brokers
+    - Versioned instrument catalog with change tracking and audit trail
+    - Underlying-derivative linkage maintained across all broker presentations
+    - Validation of tradability, lot sizes, and contract specifications per instrument
+    - Cache TTL with proactive refresh and stale-while-revalidate pattern
+    - Instrument lifecycle management (active, suspended, expired, delisted)
+    - Multi-broker instrument availability tracking and reporting
+- Symbol Standardization Architecture
+    - Internal canonical symbol format: `{EXCHANGE}:{SYMBOL}:{INSTRUMENT_TYPE}:{EXPIRY}:{STRIKE}:{OPTION_TYPE}`
+    - Broker-specific symbol mapping stored per broker_id with presentation rules
+    - Automatic symbol resolution from broker format to canonical format
+    - Symbol alias support for historical compatibility and user preferences
+    - Exchange symbol authority with broker presentation override capabilities
+    - Real-time symbol mapping updates with versioning and rollback support
+    - Symbol conflict detection and resolution across broker integrations
+    - Instrument attribute inheritance from exchange with broker-specific overrides
+- Scope
+    - Unified instrument catalog across all brokers with standardized symbols
+    - Broker-specific presentation layer customization
+    - Real-time synchronization and conflict resolution
+    - Historical instrument tracking and audit trail
+- Configuration
+    - `INSTRUMENT_SYNC_INTERVAL_MS`, `SYMBOL_MAPPING_TTL_HOURS`, `INSTRUMENT_VERSION_RETENTION_COUNT`
+    - `EXCHANGE_SYMBOL_AUTHORITY_URL`, `BROKER_PRESENTATION_OVERRIDES_ENABLED`
+- SLOs
+    - Instrument sync latency <30s for new listings, <5min for updates
+    - Symbol resolution p95 <10ms, symbol conflict resolution <1min
+    - 99.9% accuracy in symbol mapping and presentation consistency
+- Failure Modes
+    - Stale instrument data: serve from cache with warning, queue refresh
+    - Symbol mapping conflicts: flag for manual resolution, maintain both mappings
+    - Exchange connectivity loss: use last known good state, exponential backoff retry
+    - Broker presentation errors: fall back to exchange default format
+- Acceptance & Tests
+    - All brokers return consistent canonical symbols for same exchange instrument
+    - Broker presentation changes do not affect internal symbol resolution
+    - New instrument listings automatically synchronized within SLO targets
+    - Symbol conflicts detected and resolved without data loss
+    - Historical instrument tracking maintains audit trail integrity
+- Architecture (Ports/Adapters)
+    - `InstrumentPort` interface for instrument management operations
+    - `SymbolMappingPort` for broker-to-canonical symbol resolution
+    - `ExchangeInstrumentAdapter` for exchange authority integration
+    - `BrokerInstrumentAdapter` implementations per broker with presentation logic
+    - `InstrumentRegistry` domain service with symbol normalization rules
+    - DTOs: `InstrumentDTO`, `SymbolMappingDTO`, `InstrumentUpdateDTO`
+    - Value Objects: `CanonicalSymbol`, `BrokerSymbol`, `InstrumentAttributes`
+
+## 3.9. Market Data (WebSockets & Ticks)
+
+- Centralised Tick Level data subscription for instruments using WebSockets via Background Workers
+    - Ability to add or remove instruments being subscribed at runtime
+    - Automatic subscription to underlying instrument when subscribing to derivative instruments
+    - Always capture Option Greeks for derivatives
+    - Always capture OHLCV and Market Depth
+    - Always save and auto-resubscribe to instruments in case of worker restart
+    - Always keep 2 WebSocket workers running together for TickData to ensure redundancy with fallback mechanism
+    - WebSocket Tick Data should have separate QUEUE for each instrument to offload websocket data processing in case of slow DB writes
+        - Tick Processing Worker should detect and dynamically subscribe to all Tick Data QUEUES
+    - Ordering guarantees per instrument; sequence tracking and gap detection with historical backfill
+    - Snapshot persistence of subscriptions with resume points; rate-limited subscription changes
+    - Backpressure and micro-batching (10–50ms windows) for high burst handling; p95 tick-to-DB ≤ 300ms
+- Scope
+    - Live tick ingestion, sequencing, and persistence for subscribed instruments
+- Configuration
+    - `WS_MAX_SUBSCRIPTIONS`, `WS_RECONNECT_BACKOFF_MS`, `TICK_MICROBATCH_MS`, `TICK_QUEUE_MAX_DEPTH`
+- Acceptance & Tests
+    - Sequence continuity maintained; gap-fill requests issued; resume points honored after restart
+
+## 3.10. Historical Data
+
+- Centralised Historical Data Fetching for instruments via Background Workers
+    - Ability to fetch data based on date range
+    - Ability to fetch multiple instruments together
+    - Always capture OHLCV and Market Depth(if available)
+    - Automatic fetch underlying instrument data as well when fetching data for derivative instruments
+    - Always save and auto-resubscribe to instruments in case of worker restart
+    - Worker should manage to NOT have duplicate data in database, should only fetch new or missing data points
+    - When fetching or processing large historical datasets, use streaming approaches where possible to avoid loading everything into memory at once
+    - Chunking strategy per instrument and date range; pagination respectful of broker rate limits
+    - Dedupe via `(instrument_id, ts)` uniqueness; checksum validation for OHLCV consistency
+    - Resumable fetches with checkpoints; parallelism bounded to avoid DB saturation
+- Scope
+    - Batch retrieval of OHLCV and market depth across instruments and ranges
+- Configuration
+    - `HIST_FETCH_PAGE_SIZE`, `HIST_PARALLELISM`, `HIST_CHECKPOINT_INTERVAL_MS`
+- Acceptance & Tests
+    - Dedupe guarantees; checkpoint resumes; backpressure prevents DB overload
+
+## 3.11. Candle Aggregation
+
+- High-Performance Candle Aggregation Architecture
+    - **Multi-tier Aggregation Pipeline**: Separate pipelines for real-time vs historical backfill processing
+    - **Parallel Processing**: Multi-threaded aggregation with configurable worker pools per timeframe
+    - **Memory-efficient Processing**: Streaming aggregation with bounded memory usage for large datasets
+    - **Vectorized Operations**: Batch processing of multiple instruments simultaneously for CPU optimization
+    - **Incremental Aggregation**: Update existing candles incrementally instead of full recalculation
+    - **Smart Caching**: Aggressive caching of intermediate aggregation results to avoid recomputation
+    - **Partitioned Processing**: Instrument-based partitioning for parallel aggregation scalability
+    - **Optimized Data Structures**: Use columnar storage formats for faster aggregations
+    - **Hardware Acceleration**: Utilize SIMD instructions for numerical calculations where available
+- Enhanced Timeframe Support
+    - **Sub-second Candles**: 1, 5, 10, 15, 30-second intervals with microsecond precision
+    - **Standard Timeframes**: 1, 2, 3, 5, 10, 15, 30, 45, 60-minute candles
+    - **Extended Timeframes**: 2, 4, 6, 8, 12-hour candles for long-term analysis
+    - **Daily/Weekly/Monthly**: Custom aggregation for higher timeframe analysis
+    - **Market-aware Aggregation**: Exchange timezone-aware candle boundaries
+    - **Holiday-adjusted Candles**: Skip non-trading days in daily+ aggregations
+- Advanced Aggregation Chain Optimization
+    - **Hierarchical Aggregation Tree**: Optimal aggregation paths minimizing computation
+    - **Intelligent Source Selection**: Choose lowest available granularity for efficiency
+    - **Cross-timeframe Validation**: Ensure consistency across different timeframes
+    - **Aggregation Pipeline Caching**: Cache intermediate results for reuse
+    - **Lazy Evaluation**: Defer expensive aggregations until actually needed
+    - **Pre-aggregation Strategy**: Pre-compute common timeframe combinations
+    - **Adaptive Sampling**: Adjust aggregation frequency based on market volatility
+- Rollup Policies & Missing Data Detection
+    - **Automated Rollup Scheduling**: Time-based and volume-based rollup triggers
+    - **Missing Data Detection**: Automated detection of gaps in candle sequences
+    - **Gap Filling Strategies**: Forward fill, backward fill, interpolation options
+    - **Data Quality Scoring**: Confidence scores for candles based on data completeness
+    - **Rollback Capabilities**: Rollback and re-aggregate when data quality issues detected
+    - **Historical Data Validation**: Cross-reference with exchange official data where available
+    - **Anomaly Detection**: Statistical detection of outlier candles requiring investigation
+- Fast Lookup & Query Optimization
+    - **Time-series Optimized Storage**: Columnar storage with time-based partitioning
+    - **Materialized Views**: Pre-aggregated views for common query patterns
+    - **Composite Indexes**: Multi-column indexes optimized for typical queries
+    - **Query Result Caching**: Aggressive caching of frequent candle queries
+    - **Read Replicas**: Dedicated read replicas for analytical workloads
+    - **Connection Pooling**: Optimized database connection management
+    - **Query Plan Optimization**: Automated query plan analysis and optimization
+- Large Dataset Management Schemes
+    - **Tiered Storage**: Hot, warm, cold storage tiers based on access patterns
+    - **Data Lifecycle Management**: Automated archival and purging policies
+    - **Compression Strategy**: Aggressive compression for historical data
+    - **Sampling for Analytics**: Intelligent sampling for large-scale analysis
+    - **Incremental Backups**: Efficient backup strategies for large datasets
+    - **Cross-region Replication**: Geographic distribution for disaster recovery
+    - **Data Retention Policies**: Configurable retention based on regulatory requirements
+- Error Handling & Automation
+    - **Automated Recovery**: Self-healing aggregation pipelines with retry logic
+    - **Conflict Resolution**: Automatic resolution of conflicting candle data
+    - **Quality Gates**: Automated quality checks before candle publication
+    - **Alerting System**: Proactive alerts for aggregation failures and data quality issues
+    - **Rollback Automation**: Automatic rollback on detection of data corruption
+    - **Recovery Orchestration**: Coordinated recovery across multiple aggregation pipelines
+    - **Health Monitoring**: Continuous health checks with automated remediation
+- Performance SLOs & Benchmarks
+    - **Real-time Aggregation**: Sub-second candles available within 100ms of window close
+    - **Historical Processing**: Process 1 year of 1-minute data in under 5 minutes
+    - **Query Performance**: p95 candle queries < 50ms for 1-year historical data
+    - **Aggregation Throughput**: > 1 million candles/second aggregate processing rate
+    - **Memory Efficiency**: < 2GB memory usage per aggregation worker
+    - **Storage Efficiency**: < 10 bytes per candle with compression
+- Scope
+    - Ultra-high performance candle aggregation with enterprise-grade reliability
+    - Multi-timeframe support with intelligent aggregation chain optimization
+    - Large-scale data management with automated quality assurance
+- Configuration
+    - `CANDLE_ALLOWED_INTERVALS`, `CANDLE_REAGGREGATION_POLICY`, `CANDLE_WATERMARK_SKEW_MS`
+    - `CANDLE_AGGREGATION_THREADS`, `CANDLE_BATCH_SIZE`, `CANDLE_MEMORY_LIMIT_MB`
+    - `CANDLE_PARTITION_SIZE_DAYS`, `CANDLE_COMPRESSION_ENABLED`, `CANDLE_TIERED_STORAGE_ENABLED`
+    - `CANDLE_QUALITY_THRESHOLD`, `CANDLE_ANOMALY_DETECTION_ENABLED`, `CANDLE_AUTOMATED_RECOVERY_ENABLED`
+    - `CANDLE_QUERY_CACHE_TTL_SECONDS`, `CANDLE_MATERIALIZED_VIEWS_ENABLED`
+- Acceptance & Tests
+    - No partial or duplicate candles with checksum validation
+    - Sub-100ms aggregation latency for real-time candles
+    - Consistent candles across all timeframes with cross-validation
+    - Automated detection and recovery from data quality issues
+    - Scalable to 100,000+ instruments with sub-second performance
+    - Query performance meets SLO targets under high load
+
+## 3.12. Fees Management
+
+- Abstract Fee Management Architecture
+    - **Fee Engine Abstraction**: Pluggable fee calculation engine with broker-specific implementations
+    - **Fee Rule Engine**: Declarative fee rules with conditional logic and tiered structures
+    - **Multi-asset Support**: Separate fee structures for equities, currency, commodities, derivatives
+    - **Dynamic Fee Updates**: Real-time fee configuration updates without system restart
+    - **Fee Validation Engine**: Automated validation of fee calculations against broker statements
+    - **Fee Audit Trail**: Complete audit trail of all fee calculations and configuration changes
+    - **Fee Reconciliation**: Automated reconciliation of calculated vs actual broker fees
+    - **Regulatory Compliance**: Built-in compliance checks for regulatory fee requirements
+- Broker-Specific Fee Implementation (dhan Reference)
+    - **Equity Fees** (Reference: `https://zerodha.com/charges/#tab-equities`)
+        ```
+        Intraday Equity: ₹20 or 0.03% per executed order (whichever is lower)
+        Delivery Equity: ₹20 or 0.03% per executed order (whichever is lower)
+        STT: 0.1% on buy & sell (delivery), 0.025% on sell side (intraday)
+        Transaction Charges: NSE 0.00345%, BSE 0.00375%
+        GST: 18% on (brokerage + transaction charges + SEBI charges)
+        SEBI Charges: ₹10 per crore + GST
+        Stamp Duty: 0.015% on buy side (delivery), 0.003% on buy side (intraday)
+        ```
+    - **Currency Fees** (Reference: `https://zerodha.com/charges/#tab-currency`)
+        ```
+        Brokerage: ₹20 or 0.03% per executed order (whichever is lower)
+        STT: Not applicable for currency derivatives
+        Transaction Charges: NSE 0.0009%, BSE 0.00022%
+        GST: 18% on (brokerage + transaction charges + SEBI charges)
+        SEBI Charges: ₹10 per crore + GST
+        Stamp Duty: 0.0001% on buy side
+        ```
+    - **Commodity Fees** (Reference: `https://zerodha.com/charges/#tab-commodities`)
+        ```
+        Brokerage: ₹20 or 0.03% per executed order (whichever is lower)
+        CTT: 0.01% on sell side (non-agri), 0.05% on sell side (processed commodities)
+        Transaction Charges: MCX 0.0019%, NCDEX 0.003%
+        GST: 18% on (brokerage + transaction charges + SEBI charges)
+        SEBI Charges: ₹10 per crore + GST
+        Stamp Duty: 0.002% on buy side (MCX), varies by state
+        ```
+- Advanced Fee Calculation Features
+    - **Tiered Fee Structures**: Volume-based fee discounts and slabs
+    - **Promotional Fee Rules**: Temporary fee promotions and campaign management
+    - **Cross-asset Fee Optimization**: Optimal fee calculation across multiple asset classes
+    - **Intraday vs Delivery Detection**: Automatic detection and appropriate fee application
+    - **Fee Cap Management**: Daily/weekly fee caps with automatic tracking
+    - **Tax Optimization**: Tax-efficient fee calculation strategies
+    - **Currency Conversion**: Multi-currency fee support with real-time rates
+- Fee Calculation Engine
+    - **Rule Engine**: Declarative fee rules with conditional execution
+    - **Expression Parser**: Support for complex mathematical expressions
+    - **Context Provider**: Real-time market data and regulatory information
+    - **Tax Calculator**: Automated tax calculations with jurisdiction awareness
+    - **Rounding Engine**: Configurable rounding rules per component and currency
+    - **Validation Engine**: Pre and post-calculation validation rules
+- Real-time Fee Processing
+    - **Pre-trade Fee Estimation**: Real-time fee estimates before order placement
+    - **Post-trade Fee Calculation**: Accurate fee calculation after trade execution
+    - **Intraday Fee Tracking**: Running fee totals throughout trading day
+    - **End-of-day Settlement**: Final fee reconciliation and settlement
+    - **Statement Generation**: Automated fee statements with detailed breakdowns
+- Fee Reconciliation & Audit
+    - **Automated Reconciliation**: Daily reconciliation against broker statements
+    - **Discrepancy Detection**: Automated detection of fee calculation differences
+    - **Adjustment Workflow**: Workflow for handling fee discrepancies
+    - **Audit Trail**: Complete audit trail of all fee-related activities
+    - **Regulatory Reporting**: Automated regulatory fee reporting
+    - **Compliance Monitoring**: Continuous monitoring for fee compliance
+- Fee Analytics & Reporting
+    - **Fee Performance Metrics**: Cost per trade, total fees, fee trends
+    - **Broker Comparison**: Fee comparison across different brokers
+    - **Asset Class Analysis**: Fee analysis by asset class and strategy
+    - **Tax Optimization Reports**: Reports for tax optimization opportunities
+    - **Regulatory Compliance Reports**: Compliance status and reporting
+- Scope
+    - Comprehensive fee management with broker-specific implementations
+    - Multi-asset fee support with regulatory compliance
+    - Real-time fee calculation and reconciliation
+    - Advanced fee analytics and reporting
+- Configuration
+    - `FEES_CONFIG_SOURCE`, `FEES_VERSION`, `FEES_ROUNDING_RULES`, `FEES_TIER_EVALUATION_ENABLED`
+    - `FEES_REALTIME_CALCULATION_ENABLED`, `FEES_RECONCILIATION_SCHEDULE`, `FEES_AUDIT_RETENTION_DAYS`
+    - `FEES_PROMOTIONAL_RULES_ENABLED`, `FEES_TAX_OPTIMIZATION_ENABLED`, `FEES_MULTI_CURRENCY_ENABLED`
+    - `FEES_AUTOMATED_ADJUSTMENT_ENABLED`, `FEES_REGULATORY_REPORTING_ENABLED`
+- SLOs
+    - Pre-trade fee estimation latency < 10ms for 99% of requests
+    - Post-trade fee calculation accuracy > 99.9% compared to broker statements
+    - Fee reconciliation completion within 4 hours of broker statement availability
+    - Fee configuration updates applied within 5 minutes of change
+- Acceptance & Tests
+    - Fee calculations match broker statements within 0.01% tolerance
+    - All regulatory fee components are correctly calculated and reported
+    - Fee tier calculations work correctly for volume-based discounts
+    - Multi-currency fee calculations handle conversion accurately
+    - Fee reconciliation identifies all discrepancies automatically
+    - Audit trail captures all fee-related activities completely
+- Failure Modes & Recovery
+    - **Fee Configuration Errors**: Fallback to previous valid configuration
+    - **Broker API Failures**: Use cached fee rates with appropriate warnings
+    - **Currency Conversion Failures**: Use last known exchange rates
+    - **Reconciliation Failures**: Manual intervention workflow with escalation
+    - **Regulatory Changes**: Automated detection and configuration updates
+
+## 3.13. Margin Management
+
+- Advanced Margin Management Architecture
+    - **Real-time Margin Engine**: Multi-broker margin calculation with real-time updates
+    - **Dynamic Margin Types**: Support for SPAN, Exposure, NRML, Intraday, Delivery, Options, Futures margins
+    - **Cross-margining**: Cross-asset margin offset calculations for portfolio margining
+    - **Margin Forecasting**: Predictive margin requirements based on position changes
+    - **Margin Optimization**: Intelligent margin utilization optimization across strategies
+    - **Regulatory Compliance**: Automated compliance checks with exchange margin requirements
+    - **Risk-based Margining**: Dynamic margin adjustments based on market volatility and risk metrics
+- Real-time Margin Calculation
+    - **Pre-trade Margin Validation**: Microsecond latency margin checks before order placement
+    - **Post-trade Margin Updates**: Real-time margin updates after trade execution
+    - **Intraday Margin Tracking**: Continuous margin monitoring throughout trading day
+    - **Margin Utilization Analytics**: Detailed analytics of margin usage patterns
+    - **Margin Efficiency Metrics**: Portfolio margin efficiency and optimization recommendations
+    - **Cross-broker Margin Aggregation**: Consolidated margin view across multiple brokers
+- Advanced Margin Features
+    - **Margin Buffer Management**: Dynamic buffer allocation based on market conditions
+    - **Margin Call Prediction**: Early warning system for potential margin calls
+    - **Margin Optimization Strategies**: Automated margin optimization recommendations
+    - **Scenario Analysis**: What-if margin analysis for position changes
+    - **Stress Testing**: Margin requirement simulation under adverse market conditions
+    - **Historical Margin Analysis**: Margin utilization trends and pattern analysis
+- Margin Monitoring & Alerts
+    - **Real-time Margin Monitoring**: Continuous monitoring with configurable thresholds
+    - **Multi-level Alerting**: LOW, MEDIUM, HIGH, CRITICAL alert severity levels
+    - **Predictive Margin Alerts**: Early warning system based on position analysis
+    - **Margin Call Automation**: Automated margin call handling with escalation
+    - **Margin Buffer Alerts**: Alerts when margin buffer falls below thresholds
+    - **Cross-broker Margin Alerts**: Consolidated alerting across multiple brokers
+- Scope
+    - Comprehensive margin management with real-time calculations and predictive analytics
+    - Multi-broker margin aggregation with cross-margining capabilities
+    - Advanced margin optimization and risk-based margining
+- Configuration
+    - `MARGIN_CHECK_ENABLED`, `MARGIN_UTILIZATION_ALERTS`, `MARGIN_BUFFER_PCT`, `MARGIN_CROSS_MARGINING_ENABLED`
+    - `MARGIN_FORECASTING_ENABLED`, `MARGIN_SCENARIO_ANALYSIS_ENABLED`, `MARGIN_STRESS_TESTING_ENABLED`
+    - `MARGIN_ALERT_THRESHOLDS`, `MARGIN_CALL_ESCALATION_TIME_MINUTES`, `MARGIN_HISTORY_RETENTION_DAYS`
+    - `MARGIN_OPTIMIZATION_ENABLED`, `MARGIN_REAL_TIME_UPDATES_ENABLED`, `MARGIN_CROSS_BROKER_AGGREGATION_ENABLED`
+- SLOs
+    - Pre-trade margin validation latency < 5ms for 99% of requests
+    - Margin utilization alerts triggered within 30 seconds of threshold breach
+    - Margin calculation accuracy > 99.9% compared to broker calculations
+    - Cross-broker margin aggregation updated within 1 minute of changes
+- Acceptance & Tests
+    - Margin calculations match broker statements within 0.1% tolerance
+    - All margin types correctly calculated for different asset classes
+    - Margin alerts trigger at configured thresholds without false positives
+    - Cross-margining calculations optimize margin utilization correctly
+    - Stress testing scenarios accurately predict margin requirements
+- Failure Modes & Recovery
+    - **Margin API Failures**: Fallback to cached margin rates with appropriate warnings
+    - **Cross-margining Errors**: Graceful degradation to standard margin calculations
+    - **Margin Calculation Errors**: Rollback to previous valid margin state
+    - **Alert System Failures**: Escalation through multiple notification channels
+    - **Broker Connectivity Issues**: Use last known good margin data with expiry
+
+## 3.14. Portfolio Management
+
+- Advanced Portfolio Management Architecture
+    - **Multi-dimensional Portfolio Tracking**: Track positions across multiple brokers, strategies, and asset classes
+    - **Real-time Portfolio Analytics**: Live portfolio valuation with real-time P&L calculations
+    - **Advanced Position Lifecycle**: Comprehensive state management with position splitting, merging, and adjustments
+    - **Cross-broker Portfolio Aggregation**: Consolidated portfolio view across multiple brokers
+    - **Strategy-level Portfolio Tracking**: Portfolio allocation and performance tracking by strategy
+    - **Risk-adjusted Portfolio Metrics**: Sharpe ratio, Sortino ratio, maximum drawdown, volatility metrics
+    - **Tax-aware Portfolio Management**: Tax lot optimization and capital gains tracking
+- Enhanced Position Management
+    - **Multi-broker Position Tracking**: Real-time position synchronization across all connected brokers
+    - **Position Versioning**: Track position changes with full audit trail and rollback capabilities
+    - **Position Attribution**: Attribute positions to specific strategies, algorithms, or manual trades
+    - **Position Classification**: Categorize positions by type, strategy, risk level, and time horizon
+    - **Position Limits Management**: Enforce position limits at portfolio, strategy, and instrument levels
+    - **Position Transfer Management**: Support for position transfers between strategies or brokers
+    - **Corporate Actions Handling**: Automated processing of dividends, splits, mergers, and other corporate actions
+- Advanced P&L Management
+    - **Real-time P&L Calculation**: Live realized and unrealized P&L with mark-to-market updates
+    - **Multi-currency P&L**: Automatic currency conversion with real-time exchange rates
+    - **P&L Attribution**: Break down P&L by strategy, instrument, time period, and market conditions
+    - **P&L Forecasting**: Predictive P&L based on current positions and market conditions
+    - **Scenario Analysis**: What-if P&L analysis for position changes and market movements
+    - **P&L Reconciliation**: Automated reconciliation of calculated vs broker P&L
+    - **Performance Benchmarking**: Compare portfolio performance against market benchmarks
+- Advanced Portfolio Features
+    - **Portfolio Rebalancing**: Automated portfolio rebalancing based on target allocations
+    - **Tax Lot Optimization**: Intelligent tax lot selection for optimal tax efficiency
+    - **Performance Attribution**: Detailed performance attribution by factor, sector, geography
+    - **Risk Decomposition**: Portfolio risk decomposition by factor, instrument, and strategy
+    - **Liquidity Management**: Portfolio liquidity analysis and optimization
+    - **ESG Integration**: Environmental, social, and governance factors in portfolio management
+    - **Multi-asset Portfolio Support**: Unified portfolio management across asset classes
+- Portfolio Analytics & Reporting
+    - **Real-time Dashboards**: Live portfolio dashboards with key metrics and alerts
+    - **Custom Report Generation**: Flexible report generation with custom metrics and time periods
+    - **Benchmark Comparison**: Performance comparison against multiple benchmarks
+    - **Peer Comparison**: Portfolio performance comparison against peer groups
+    - **Scenario Analysis**: Portfolio performance under different market scenarios
+    - **Stress Testing**: Portfolio stress testing under adverse market conditions
+- Scope
+    - Comprehensive portfolio management with multi-broker, multi-strategy support
+    - Advanced analytics and performance tracking with risk-adjusted metrics
+    - Tax-aware portfolio management with optimization capabilities
+    - Real-time portfolio monitoring and automated rebalancing
+- Configuration
+    - `PORTFOLIO_MTM_TIME`, `PORTFOLIO_CORP_ACTIONS_ENABLED`, `PORTFOLIO_CROSS_BROKER_AGGREGATION_ENABLED`
+    - `PORTFOLIO_REBALANCING_ENABLED`, `PORTFOLIO_TAX_OPTIMIZATION_ENABLED`, `PORTFOLIO_PERFORMANCE_ATTRIBUTION_ENABLED`
+    - `PORTFOLIO_RISK_DECOMPOSITION_ENABLED`, `PORTFOLIO_LIQUIDITY_MANAGEMENT_ENABLED`, `PORTFOLIO_SCENARIO_ANALYSIS_ENABLED`
+    - `PORTFOLIO_REAL_TIME_UPDATES_ENABLED`, `PORTFOLIO_HISTORY_RETENTION_DAYS`, `PORTFOLIO_REPORTING_INTERVAL_MINUTES`
+- SLOs
+    - Portfolio valuation updates within 100ms of market data changes
+    - P&L calculations accuracy > 99.9% compared to broker statements
+    - Corporate actions processing within 2 hours of market close
+    - Portfolio rebalancing execution within 5 minutes of trigger
+    - Cross-broker portfolio aggregation latency < 1 second
+- Acceptance & Tests
+    - Portfolio valuations match broker statements within 0.01% tolerance
+    - Corporate actions are processed correctly with position adjustments
+    - Performance metrics are calculated accurately and consistently
+    - Tax lot optimization improves tax efficiency measurably
+    - Cross-broker aggregation provides consistent portfolio view
+    - Position lifecycle tracking maintains audit trail integrity
+- Failure Modes & Recovery
+    - **Broker API Failures**: Use cached position data with appropriate staleness warnings
+    - **Corporate Actions Processing**: Manual intervention workflow with escalation
+    - **Performance Calculation Errors**: Rollback to previous valid calculations
+    - **Tax Optimization Failures**: Fallback to FIFO method with appropriate logging
+    - **Cross-broker Aggregation**: Degraded mode with partial data and clear notifications
+
+## 3.15 Risk Management
+
+- Advanced Risk Management Architecture
+    - **Multi-layered Risk Framework**: Portfolio-level, strategy-level, instrument-level, and order-level risk controls
+    - **Real-time Risk Engine**: Sub-millisecond risk calculations with pre-trade and post-trade validation
+    - **Dynamic Risk Assessment**: Risk calculations adapt to market volatility, correlation changes, and portfolio composition
+    - **Cross-asset Risk Aggregation**: Consolidated risk view across multiple asset classes and brokers
+    - **Scenario-based Risk Analysis**: Monte Carlo simulations and stress testing under various market conditions
+    - **Regulatory Risk Compliance**: Automated compliance with regulatory risk requirements (VaR, stress testing)
+    - **Predictive Risk Modeling**: Machine learning-based risk prediction and early warning systems
+- Comprehensive Risk Controls
+    - **Position Risk Management**: Position size limits, concentration limits, and sector exposure controls
+    - **Market Risk Controls**: Value-at-Risk (VaR), Conditional VaR, and expected shortfall calculations
+    - **Credit Risk Management**: Counterparty risk assessment and exposure monitoring
+    - **Liquidity Risk Controls**: Liquidity-adjusted risk metrics and liquidity stress testing
+    - **Operational Risk Management**: Automated detection of operational risk events and anomalies
+    - **Concentration Risk Limits**: Single instrument, sector, and geographic concentration limits
+    - **Correlation Risk Monitoring**: Dynamic correlation monitoring and portfolio diversification metrics
+- Advanced Stop Loss & Take Profit Framework
+    - **Multi-tier Stop Loss System**: Hard stops, trailing stops, time-based stops, and volatility-adjusted stops
+    - **Intelligent Trailing Stops**: ATR-based, percentage-based, and volatility-adjusted trailing mechanisms
+    - **Take Profit Optimization**: Multi-level take profit targets with partial profit booking
+    - **Dynamic Stop Loss Adjustment**: Automatic adjustment based on market volatility and ATR
+    - **Bracket Order Management**: Integrated stop loss and take profit with OCO (One-Cancels-Other) logic
+    - **Guaranteed Stop Loss**: Premium stop loss guarantees for critical positions
+    - **Stop Loss Analytics**: Performance analysis of stop loss effectiveness and optimization
+- Risk Calculation Engine
+    - **Real-time VaR Calculations**: Parametric, historical, and Monte Carlo VaR methodologies
+    - **Risk Decomposition**: Risk breakdown by factor, instrument, sector, geography, and strategy
+    - **Stress Testing Framework**: Comprehensive stress testing with historical and hypothetical scenarios
+    - **Sensitivity Analysis**: Greeks calculation (Delta, Gamma, Theta, Vega, Rho) for options positions
+    - **Correlation Risk Modeling**: Dynamic correlation analysis and portfolio diversification metrics
+    - **Tail Risk Analysis**: Extreme event analysis and tail risk probability calculations
+    - **Risk-adjusted Performance**: Sharpe ratio, Sortino ratio, Calmar ratio, and information ratio calculations
+- Portfolio Risk Management
+    - **Portfolio-level Risk Limits**: Overall portfolio risk constraints and risk budgeting
+    - **Strategy Risk Allocation**: Risk allocation across different trading strategies
+    - **Dynamic Risk Budgeting**: Adaptive risk allocation based on strategy performance
+    - **Risk Parity Allocation**: Risk parity-based position sizing and portfolio construction
+    - **Maximum Drawdown Controls**: Multi-level drawdown limits with automatic position reduction
+    - **Risk Contribution Analysis**: Marginal risk contribution and risk budgeting analysis
+    - **Portfolio Insurance Strategies**: CPPI (Constant Proportion Portfolio Insurance) and OBPI strategies
+- Real-time Risk Monitoring & Alerts
+    - **Multi-dimensional Risk Dashboard**: Real-time risk visualization with drill-down capabilities
+    - **Predictive Risk Alerts**: Early warning system based on market conditions and portfolio changes
+    - **Risk Limit Breach Detection**: Real-time monitoring with configurable thresholds and escalation
+    - **Correlation Break Alerts**: Automatic detection of correlation breakdowns and portfolio diversification issues
+    - **Stress Test Automation**: Automated daily stress testing with comprehensive scenario coverage
+    - **Risk Event Correlation**: Intelligent correlation of risk events across portfolio and market data
+- Risk Analytics & Reporting
+    - **Comprehensive Risk Reports**: Daily, weekly, monthly risk reports with detailed analytics
+    - **Risk Attribution Analysis**: Detailed breakdown of risk sources and contributions
+    - **Historical Risk Analysis**: Trend analysis of risk metrics and risk-adjusted performance
+    - **Peer Risk Comparison**: Portfolio risk comparison against benchmarks and peer groups
+    - **Regulatory Risk Reporting**: Automated generation of regulatory risk reports (Basel III, CCAR)
+    - **Risk Model Validation**: Backtesting and validation of risk models with performance attribution
+- Scope
+    - Multi-layered risk management with real-time calculations and predictive modeling
+    - Comprehensive risk controls from order-level to portfolio-level with cross-asset aggregation
+    - Advanced stop loss and take profit frameworks with intelligent automation
+    - Stress testing and scenario analysis with regulatory compliance features
+- Configuration
+    - `RISK_REAL_TIME_CALCULATION_ENABLED`, `RISK_VAR_CONFIDENCE_LEVELS`, `RISK_STRESS_TEST_SCENARIOS`
+    - `RISK_CORRELATION_MONITORING_ENABLED`, `RISK_PREDICTIVE_MODELING_ENABLED`, `RISK_REGULATORY_COMPLIANCE_ENABLED`
+    - `RISK_STOP_LOSS_TYPES_ENABLED`, `RISK_TRAILING_STOP_ADJUSTMENT_ENABLED`, `RISK_PORTFOLIO_INSURANCE_ENABLED`
+    - `RISK_ALERT_THRESHOLDS`, `RISK_BREACH_ESCALATION_TIME_MINUTES`, `RISK_STRESS_TEST_FREQUENCY_HOURS`
+    - `RISK_MODEL_VALIDATION_ENABLED`, `RISK_HISTORICAL_ANALYSIS_DAYS`, `RISK_PEER_COMPARISON_ENABLED`
+- SLOs
+    - Pre-trade risk validation latency < 3ms for 99% of requests
+    - VaR calculations updated within 5 minutes of market data changes
+    - Risk limit breach alerts triggered within 30 seconds of threshold breach
+    - Stress test results available within 15 minutes of scenario execution
+    - Risk model backtesting completed daily with 99.9% accuracy validation
+- Acceptance & Tests
+    - Risk calculations validated against industry standard risk models
+    - Stop loss execution accuracy > 99.9% with minimal slippage
+    - Stress test results consistent with historical market events
+    - Risk limit breaches detected and escalated within configured timeframes
+    - Correlation monitoring accurately detects portfolio diversification breakdowns
+    - Predictive risk models demonstrate > 85% accuracy in risk event prediction
+- Failure Modes & Recovery
+    - **Risk Calculation Failures**: Fallback to simplified risk models with appropriate warnings
+    - **Market Data Disruptions**: Use last known good data with staleness indicators
+    - **Stress Test Failures**: Graceful degradation to standard risk metrics
+    - **Stop Loss System Failures**: Manual intervention workflow with escalation procedures
+    - **Risk Model Validation Failures**: Alert risk management team and use previous validated models
+
+## 3.16 Reporting
+
+- Advanced Reporting & Analytics Architecture
+    - **Multi-dimensional Reporting Framework**: Time-based, instrument-based, strategy-based, and risk-based reporting
+    - **Real-time Report Generation**: Live report generation with streaming data updates and configurable refresh rates
+    - **Interactive Report Dashboards**: Drill-down capabilities with multi-level navigation and dynamic filtering
+    - **Automated Report Scheduling**: Configurable automated report generation and distribution via multiple channels
+    - **Report Versioning & Audit**: Complete audit trail of report generation with parameter tracking and version control
+    - **Custom Report Builder**: Visual report designer with drag-and-drop interface and custom metric definitions
+    - **Multi-format Export Support**: PDF, Excel, CSV, JSON, XML, and API endpoints for programmatic access
+- Comprehensive Performance Analytics
+    - **Advanced Performance Metrics**: Sharpe ratio, Sortino ratio, Calmar ratio, Information ratio, Treynor ratio
+    - **Risk-adjusted Performance Analysis**: Alpha, Beta, Tracking error, R-squared, Maximum drawdown analysis
+    - **Benchmark Comparison Analysis**: Multiple benchmark support with relative performance attribution
+    - **Peer Group Analysis**: Performance comparison against configurable peer groups and indices
+    - **Time-weighted vs Money-weighted Returns**: Both TWRR and MWRR calculations with detailed breakdowns
+    - **Attribution Analysis**: Performance attribution by instrument, sector, geography, strategy, and factor
+    - **Statistical Performance Measures**: Skewness, Kurtosis, VaR, CVaR, and higher moment analysis
+- Trading Analytics & Insights
+    - **Trade Execution Analysis**: Fill rates, Slippage analysis, Timing analysis, and execution quality metrics
+    - **Win/Loss Analysis**: Win rate, Average win/loss, Profit factor, Expectancy, and trade distribution
+    - **Holding Period Analysis**: Average holding period, Turnover analysis, and position duration statistics
+    - **Drawdown Analysis**: Maximum drawdown, Drawdown duration, Recovery time, and underwater analysis
+    - **Consecutive Win/Loss Streaks**: Streak analysis with statistical significance testing
+    - **Seasonal and Temporal Analysis**: Intraday, weekly, monthly, and seasonal performance patterns
+    - **Correlation and Beta Analysis**: Portfolio correlation with markets and individual beta calculations
+- Tax & Regulatory Reporting
+    - **Comprehensive Tax Reporting**: Capital gains/losses, Tax lot optimization, Wash sale detection
+    - **Regulatory Compliance Reports**: Automated generation of regulatory required reports
+    - **Audit Trail Reports**: Complete transaction history with compliance verification
+    - **Fee and Commission Analysis**: Detailed fee breakdown, Commission analysis, and cost attribution
+    - **Currency Conversion Reporting**: Multi-currency support with real-time and historical exchange rates
+    - **Corporate Actions Reporting**: Dividends, splits, mergers, and their impact on performance
+    - **Realized vs Unrealized P&L**: Separate tracking and reporting of realized and unrealized gains/losses
+- Advanced Report Types
+    - **Executive Summary Reports**: High-level performance summaries for management and stakeholders
+    - **Detailed Transaction Reports**: Comprehensive trade-by-trade analysis with execution details
+    - **Portfolio Composition Reports**: Asset allocation, sector allocation, and geographic distribution
+    - **Risk Exposure Reports**: VaR analysis, Stress test results, and risk factor exposures
+    - **Compliance Monitoring Reports**: Regulatory compliance status and exception reporting
+    - **Operational Efficiency Reports**: System performance, API usage, and operational metrics
+    - **Client Statement Reports**: Customizable client statements with branding and personalization
+- Interactive Dashboard Features
+    - **Real-time Dashboard Updates**: Live data streaming with configurable refresh intervals
+    - **Multi-level Drill-down**: From high-level summary to detailed transaction-level analysis
+    - **Customizable Widgets**: Drag-and-drop dashboard builder with custom widget creation
+    - **Comparative Analysis Tools**: Side-by-side performance and risk comparisons
+    - **Chart and Visualization Library**: Advanced charting with technical indicators and annotations
+    - **Export and Sharing**: One-click export and secure sharing of dashboard views
+    - **Mobile-responsive Design**: Responsive design for desktop, tablet, and mobile access
+- Report Automation & Distribution
+    - **Intelligent Report Scheduling**: Smart scheduling based on market hours and data availability
+    - **Multi-channel Distribution**: Email, FTP, API, webhook, and secure portal distribution
+    - **Conditional Report Generation**: Trigger-based report generation based on events or thresholds
+    - **Report Personalization**: Custom branding, logos, and personalized content for different stakeholders
+    - **Quality Assurance**: Automated data validation, consistency checks, and anomaly detection
+    - **Report Archival**: Long-term archival with search and retrieval capabilities
+    - **Access Control & Security**: Role-based access control with audit trails and data encryption
+- Scope
+    - Comprehensive reporting and analytics with multi-dimensional analysis capabilities
+    - Real-time and historical performance analysis with risk-adjusted metrics
+    - Automated report generation and distribution with customizable scheduling
+    - Interactive dashboards with drill-down capabilities and custom visualization
+- Configuration
+    - `REPORTING_REAL_TIME_ENABLED`, `REPORTING_CACHE_TTL_SECONDS`, `REPORTING_MAX_CONCURRENT_GENERATIONS`
+    - `REPORTING_DATA_RETENTION_DAYS`, `REPORTING_ARCHIVE_ENABLED`, `REPORTING_VALIDATION_ENABLED`
+    - `REPORTING_DASHBOARD_REFRESH_INTERVAL_MS`, `REPORTING_EXPORT_FORMATS`, `REPORTING_SCHEDULER_ENABLED`
+    - `REPORTING_AUDIT_TRAIL_ENABLED`, `REPORTING_ACCESS_CONTROL_ENABLED`, `REPORTING_MOBILE_ENABLED`
+- SLOs
+    - Report generation latency < 30 seconds for standard reports
+    - Real-time dashboard updates within 5 seconds of data changes
+    - Scheduled report delivery within 1 minute of scheduled time
+    - Report export generation within 10 seconds for standard formats
+    - Interactive dashboard response time < 2 seconds for drill-down operations
+- Acceptance & Tests
+    - Report metrics validated against source data with 99.9% accuracy
+    - All export formats generated correctly with proper formatting
+    - Scheduled reports delivered consistently within configured timeframes
+    - Interactive dashboards function correctly across all supported devices
+    - Report generation handles edge cases and large datasets gracefully
+    - Audit trail captures all report access and modification events
+- Failure Modes & Recovery
+    - **Report Generation Failures**: Automatic retry with exponential backoff and fallback templates
+    - **Data Source Unavailability**: Use cached data with staleness warnings and partial reporting
+    - **Export Format Failures**: Fallback to alternative formats with user notification
+    - **Dashboard Loading Issues**: Graceful degradation with reduced functionality
+    - **Distribution Failures**: Multiple delivery channel fallback with escalation notifications
+
+## 3.17. Order Management
+
+- Advanced Order Management Architecture
+    - **Multi-tier Order Processing Pipeline**: Order validation, risk checking, margin verification, and execution with microsecond latency
+    - **Intelligent Order Routing**: Smart order routing across multiple brokers with best execution algorithms
+    - **Advanced Order Types**: Market, Limit, Stop, Stop-Limit, Trailing Stop, Iceberg, TWAP, VWAP, and custom algorithmic orders
+    - **Dynamic Order Management**: Real-time order modification, cancellation, and status tracking with state machine architecture
+    - **Cross-broker Order Aggregation**: Unified order view across multiple brokers with consolidated execution analytics
+    - **Algorithmic Order Execution**: TWAP, VWAP, POV, Implementation Shortfall, and custom algorithmic execution strategies
+    - **Pre and Post-trade Analytics**: Real-time TCA (Transaction Cost Analysis) and execution quality measurement
+- Comprehensive Order Lifecycle Management
+    - **Multi-state Order Workflow**: Advanced state machine with 15+ order states and 50+ state transitions
+    - **Intelligent Order Validation**: Multi-layer validation including risk checks, margin verification, and regulatory compliance
+    - **Adaptive Order Sizing**: Dynamic order sizing based on market conditions, liquidity, and execution constraints
+    - **Smart Order Routing**: Best execution routing with real-time market data and broker performance analytics
+    - **Order Splitting and Aggregation**: Intelligent order splitting for large orders and aggregation of small orders
+    - **Cross-market Order Management**: Multi-exchange order management with currency and timezone handling
+    - **Order Lifecycle Analytics**: Comprehensive analytics on order execution quality, fill rates, and timing
+- Advanced Order Types & Execution Strategies
+    - **Algorithmic Execution Strategies**: TWAP, VWAP, POV (Percentage of Volume), Implementation Shortfall, Adaptive Shortfall
+    - **Conditional Orders**: OCO (One-Cancels-Other), OTO (One-Triggers-Other), and complex conditional order chains
+    - **Iceberg Orders**: Hidden large orders with visible portion management and refill logic
+    - **Trailing Orders**: Dynamic trailing stop and trailing limit orders with multiple trailing mechanisms
+    - **Time-based Orders**: Good-Till-Date (GTD), Good-Till-Cancelled (GTC), Day orders, and custom time constraints
+    - **Volume-based Orders**: Volume participation orders with dynamic participation rate adjustment
+    - **Price Improvement Orders**: Smart order types designed to capture price improvement opportunities
+- Real-time Order Execution & Monitoring
+    - **Sub-millisecond Order Processing**: Ultra-low latency order processing with sub-millisecond response times
+    - **Real-time Fill Notifications**: Instant fill notifications with detailed execution analytics and venue attribution
+    - **Partial Fill Management**: Intelligent partial fill handling with remainder order management and optimization
+    - **Slippage and Impact Analysis**: Real-time slippage monitoring and market impact analysis with alerts
+    - **Execution Quality Monitoring**: Best execution monitoring with TCA and execution quality scorecards
+    - **Market Data Integration**: Real-time market data integration for dynamic order adjustment and optimization
+    - **Latency Monitoring**: End-to-end latency monitoring with performance optimization and alerting
+- Advanced Order Risk Management
+    - **Pre-trade Risk Controls**: Position limits, concentration limits, notional limits, and regulatory compliance checks
+    - **Real-time Risk Monitoring**: Continuous risk monitoring during order execution with dynamic risk adjustment
+    - **Market Impact Controls**: Market impact estimation and controls to minimize adverse market impact
+    - **Liquidity Risk Management**: Liquidity-adjusted order sizing and execution with liquidity monitoring
+    - **Volatility-based Controls**: Dynamic order sizing and pricing based on real-time volatility measures
+    - **Correlation Risk Controls**: Cross-instrument correlation monitoring and portfolio-level risk aggregation
+    - **Circuit Breaker Integration**: Market circuit breaker integration with automatic order handling
+- Advanced Order Monitoring & Control
+    - **Real-time Order Book Management**: Live order book monitoring with market depth analysis
+    - **Intelligent Order Modification**: Dynamic order modification based on market conditions and execution progress
+    - **Cross-market Order Coordination**: Coordination of orders across multiple markets and time zones
+    - **Order Performance Monitoring**: Real-time monitoring of order execution performance vs benchmarks
+    - **Market Impact Assessment**: Continuous assessment of market impact and execution quality
+    - **Adaptive Execution Logic**: Dynamic adjustment of execution parameters based on market feedback
+    - **Emergency Order Controls**: Emergency order cancellation and position flattening capabilities
+- Order Compliance & Audit
+    - **Comprehensive Audit Trail**: Complete order lifecycle audit trail with regulatory compliance
+    - **Best Execution Compliance**: Automated best execution monitoring and compliance reporting
+    - **Regulatory Reporting**: Automated regulatory reporting for order execution and compliance
+    - **Trade Reconstruction**: Complete trade reconstruction capabilities for regulatory inquiries
+    - **Compliance Rule Engine**: Configurable compliance rules with real-time validation and alerting
+    - **Market Abuse Detection**: Automated detection of potential market abuse and manipulative behavior
+    - **Cross-border Compliance**: Multi-jurisdiction compliance support with local regulatory requirements
+- Scope
+    - Comprehensive order management with advanced order types and algorithmic execution
+    - Real-time order processing with sub-millisecond latency and intelligent routing
+    - Advanced execution strategies with TCA and best execution monitoring
+    - Complete order lifecycle management with compliance and audit capabilities
+- Configuration
+    - `ORDER_MANAGEMENT_LATENCY_TARGET_MS`, `ORDER_EXECUTION_STRATEGIES_ENABLED`, `ORDER_ALGORITHMIC_TRADING_ENABLED`
+    - `ORDER_REAL_TIME_MONITORING_ENABLED`, `ORDER_CROSS_BROKER_ROUTING_ENABLED`, `ORDER_EXECUTION_ANALYTICS_ENABLED`
+    - `ORDER_COMPLIANCE_MONITORING_ENABLED`, `ORDER_BEST_EXECUTION_ENABLED`, `ORDER_MARKET_ABUSE_DETECTION_ENABLED`
+    - `ORDER_EMERGENCY_CONTROLS_ENABLED`, `ORDER_AUDIT_TRAIL_RETENTION_DAYS`, `ORDER_PERFORMANCE_BENCHMARKING_ENABLED`
+- SLOs
+    - Order processing latency < 1ms for 99.9% of orders
+    - Order fill notifications delivered within 100ms of execution
+    - Order state transitions tracked with 99.99% accuracy
+    - Execution analytics available within 5 minutes of order completion
+    - Best execution compliance monitoring with 99.5% accuracy
+- Acceptance & Tests
+    - All order types execute correctly with proper state management
+    - Algorithmic execution strategies perform within benchmark tolerances
+    - Order modification and cancellation processed within latency targets
+    - Execution quality metrics accurately reflect market conditions and performance
+    - Compliance monitoring correctly identifies and flags potential violations
+    - Audit trail captures all order events with complete accuracy
+- Failure Modes & Recovery
+    - **Order Processing Failures**: Automatic retry with exponential backoff and alternative routing
+    - **Broker Connectivity Issues**: Failover to alternative brokers with order state preservation
+    - **Market Data Disruptions**: Use cached market data with appropriate staleness warnings
+    - **Algorithmic Strategy Failures**: Graceful fallback to standard order types with notification
+    - **Compliance System Failures**: Alert compliance team and use conservative execution parameters
+
+## 3.18. Indicator Management
+
+- Advanced Indicator Architecture with Configuration-Driven Logic
+    - **Flexible Indicator Framework**: Maintain indicator logic in code with runtime configuration flexibility
+    - **Multi-variate Parameter Support**: Support for complex parameter structures including arrays, objects, and conditional parameters
+    - **Configuration-Driven Data Passing**: Indicators receive data through standardized configuration interfaces
+    - **Dynamic Parameter Validation**: Runtime parameter validation with type checking and range validation
+    - **Hot-reload Capability**: Update indicator configurations without system restart
+    - **Versioned Indicator Logic**: Support for multiple versions of indicator implementations
+    - **Performance Optimization**: Cached computations with intelligent cache invalidation strategies
+- Multi-variate Parameter System
+    - **Complex Data Types**: Support for arrays, objects, nested structures, and conditional parameters
+    - **Dynamic Parameter Generation**: Runtime parameter calculation based on market conditions
+    - **Parameter Dependencies**: Automatic parameter validation based on inter-parameter dependencies
+    - **Conditional Parameters**: Parameters that activate/deactivate based on other parameter values
+    - **Parameter Templates**: Reusable parameter sets for common indicator configurations
+    - **Parameter Versioning**: Track parameter changes with rollback capabilities
+    - **A/B Testing Support**: Multiple parameter sets for testing different indicator configurations
+- Configuration-Driven Data Interface
+    - **Standardized Data Contracts**: Indicators receive data through well-defined interfaces
+    - **Multi-timeframe Data Access**: Seamless access to multiple timeframe data within indicators
+    - **Real-time vs Historical Mode**: Different data access patterns for live vs backtest modes
+    - **Data Source Abstraction**: Indicators work with multiple data sources (candles, ticks, orderbook)
+    - **Streaming Data Support**: Real-time data streaming for high-frequency indicators
+    - **Data Quality Filtering**: Automatic filtering of poor quality data before indicator processing
+    - **Data Transformation Pipeline**: Built-in data transformation and preprocessing capabilities
+- Advanced Indicator Features
+    - **Composite Indicators**: Combine multiple indicators with configurable weights
+    - **Machine Learning Integration**: Support for ML-based indicators with model versioning
+    - **Custom Indicator Development**: Framework for developing custom indicators with full flexibility
+    - **Indicator Chaining**: Chain indicators together with configurable data flow
+    - **State Management**: Persistent state across indicator calculations for complex algorithms
+    - **Signal Aggregation**: Combine signals from multiple indicators with configurable logic
+    - **Market Regime Detection**: Automatic detection of market conditions affecting indicator behavior
+- Performance & Optimization
+    - **Vectorized Computations**: NumPy/Pandas-based vectorized calculations for performance
+    - **Parallel Processing**: Multi-threaded indicator computation for independent indicators
+    - **Incremental Updates**: Update indicators incrementally instead of full recalculation
+    - **Memory Management**: Intelligent memory management with configurable limits per indicator
+    - **Computation Time Limits**: Enforced maximum computation time with graceful degradation
+    - **Caching Strategy**: Multi-level caching (L1: memory, L2: Redis, L3: database)
+    - **Resource Pooling**: Pool-based resource management for indicator computations
+- Indicator Lifecycle Management
+    - **Development Mode**: Sandbox environment for indicator development and testing
+    - **Staging Environment**: Pre-production testing with real market data
+    - **Production Deployment**: Safe deployment with rollback capabilities
+    - **Monitoring & Alerting**: Performance monitoring with automated alerting
+    - **A/B Testing Framework**: Built-in support for testing indicator variations
+    - **Gradual Rollout**: Phased rollout of new indicator versions
+    - **Performance Analytics**: Detailed performance metrics and optimization suggestions
+- Scope
+    - Flexible technical indicator framework with configuration-driven logic and multi-variate parameter support
+    - High-performance indicator computation with advanced caching and optimization
+    - Real-time and historical indicator calculations with consistent output schemas
+    - Comprehensive indicator lifecycle management with version control and A/B testing
+- Configuration
+    - `INDICATOR_CACHE_ENABLED`, `INDICATOR_ALLOWED_SET`, `INDICATOR_MAX_COMPUTATION_TIME_MS`
+    - `INDICATOR_MEMORY_LIMIT_MB`, `INDICATOR_PARALLEL_WORKERS`, `INDICATOR_CACHE_TTL_SECONDS`
+    - `INDICATOR_VERSIONING_ENABLED`, `INDICATOR_AB_TESTING_ENABLED`, `INDICATOR_PERFORMANCE_MONITORING_ENABLED`
+    - `INDICATOR_HOT_RELOAD_ENABLED`, `INDICATOR_VALIDATION_STRICT_MODE`, `INDICATOR_RESOURCE_POOL_SIZE`
+- SLOs
+    - Indicator computation p95 latency < 50ms for standard indicators
+    - Cache hit ratio > 0.9 for frequently used indicators
+    - Memory usage per indicator < 100MB under normal load
+    - Indicator configuration updates applied within 30 seconds
+    - A/B testing framework supports 10+ concurrent indicator variations
+- Acceptance & Tests
+    - Parameter validation prevents invalid configurations from being applied
+    - Deterministic outputs for same input data and parameters
+    - Performance benchmarks met for all standard indicator types
+    - Configuration changes can be rolled back safely
+    - Multi-variate parameters work correctly with complex data structures
+    - Indicator chaining and composition function correctly
+- Failure Modes & Recovery
+    - **Invalid Parameters**: Graceful degradation with fallback to default parameters
+    - **Computation Timeouts**: Partial results with appropriate warnings
+    - **Memory Limits**: Automatic cleanup and recomputation with reduced scope
+    - **Configuration Errors**: Rollback to previous valid configuration
+    - **Data Quality Issues**: Reduced confidence scores with data quality warnings
+
+## 3.19. Strategy Management
+
+- Advanced Strategy Management Architecture
+    - **Multi-layered Strategy Framework**: Strategy templates, instances, versions, and configurations with complete lifecycle management
+    - **Dynamic Strategy Engine**: Runtime strategy loading, hot-reloading, and dynamic parameter adjustment without system restart
+    - **Strategy Composition Framework**: Combine multiple strategies with portfolio-level allocation, risk management, and performance attribution
+    - **Multi-timeframe Strategy Support**: Strategies operating across multiple timeframes with synchronized execution and data management
+    - **Strategy State Management**: Persistent strategy state across restarts with checkpoint/resume capabilities and state versioning
+    - **Advanced Signal Processing**: Multi-level signal aggregation, signal validation, and intelligent signal routing across strategies
+    - **Strategy Performance Analytics**: Real-time performance tracking with attribution analysis and benchmark comparison
+- Comprehensive Strategy Lifecycle Management
+    - **Strategy Development Environment**: Sandbox environment for strategy development with real market data and simulated execution
+    - **Strategy Validation Framework**: Automated validation including syntax checks, logic validation, and risk assessment
+    - **Strategy Deployment Pipeline**: Staged deployment from development to staging to production with approval workflows
+    - **Strategy Version Control**: Complete version history with rollback capabilities and A/B testing support
+    - **Strategy Resource Management**: Dynamic resource allocation, memory management, and CPU optimization per strategy
+    - **Strategy Health Monitoring**: Real-time health checks, performance monitoring, and automated recovery mechanisms
+    - **Strategy Dependency Management**: Handle strategy dependencies, shared libraries, and external data sources
+- Advanced Strategy Execution Engine
+    - **Multi-threaded Strategy Execution**: Parallel strategy execution with intelligent resource allocation and load balancing
+    - **Event-driven Architecture**: Event-driven strategy execution with real-time market data integration and signal processing
+    - **Strategy Orchestration**: Coordination of multiple strategies with portfolio-level constraints and risk management
+    - **Dynamic Strategy Parameters**: Runtime parameter adjustment based on market conditions and strategy performance
+    - **Strategy Signal Validation**: Multi-level signal validation including technical validation, risk validation, and business rule validation
+    - **Intelligent Order Management**: Smart order routing, execution optimization, and fill simulation with realistic market modeling
+    - **Real-time Performance Monitoring**: Live performance tracking with attribution analysis and benchmark comparison
+- Comprehensive Risk Integration
+    - **Strategy-level Risk Controls**: Position limits, concentration limits, and drawdown limits at individual strategy level
+    - **Portfolio-level Risk Aggregation**: Cross-strategy risk aggregation with correlation analysis and diversification metrics
+    - **Dynamic Risk Adjustment**: Automatic risk parameter adjustment based on market volatility and strategy performance
+    - **Risk Budget Allocation**: Dynamic risk budget allocation across strategies based on performance and market conditions
+    - **Stress Testing Integration**: Real-time stress testing of strategy portfolios under various market scenarios
+    - **Risk Attribution Analysis**: Detailed risk attribution analysis by strategy, instrument, and risk factor
+    - **Early Warning Systems**: Predictive risk alerts and early warning systems for strategy performance degradation
+- Advanced Paper Trading Framework
+    - **High-fidelity Simulation**: Realistic market simulation with accurate fill modeling, slippage simulation, and latency injection
+    - **Multi-broker Simulation**: Simultaneous paper trading across multiple brokers with realistic broker-specific behaviors
+    - **Market Impact Modeling**: Sophisticated market impact modeling based on historical data and market microstructure
+    - **Partial Fill Simulation**: Realistic partial fill simulation with queue position modeling and volume impact analysis
+    - **Latency and Slippage Modeling**: Configurable latency injection and dynamic slippage modeling based on market conditions
+    - **Paper vs Live Performance Tracking**: Comprehensive performance comparison between paper and live trading with attribution analysis
+    - **Strategy Validation Framework**: Automated strategy validation including backtesting, forward testing, and statistical significance testing
+- Strategy Performance Analytics & Benchmarking
+    - **Multi-dimensional Performance Analysis**: Performance analysis by timeframe, market condition, instrument, and strategy component
+    - **Advanced Benchmarking Framework**: Multiple benchmark support with custom benchmark creation and peer comparison
+    - **Attribution Analysis**: Detailed performance attribution by factor, sector, geography, and strategy component
+    - **Risk-adjusted Performance Metrics**: Sharpe ratio, Sortino ratio, Information ratio, Calmar ratio, and custom risk metrics
+    - **Statistical Significance Testing**: Statistical significance testing of strategy performance with confidence intervals
+    - **Performance Persistence Analysis**: Analysis of performance persistence and strategy decay over time
+    - **Peer Group Comparison**: Performance comparison against strategy peer groups and industry benchmarks
+- Advanced Strategy Monitoring & Control
+    - **Real-time Strategy Dashboard**: Live strategy monitoring with performance metrics, risk metrics, and signal visualization
+    - **Strategy Health Monitoring**: Automated health checks with predictive failure detection and self-healing capabilities
+    - **Performance Attribution**: Real-time performance attribution by instrument, sector, timeframe, and strategy component
+    - **Risk Monitoring Integration**: Integrated risk monitoring with real-time risk alerts and automatic risk adjustment
+    - **Strategy Comparison Tools**: Side-by-side strategy comparison with statistical significance testing and performance ranking
+    - **Automated Strategy Control**: Intelligent strategy control with automatic pause/resume based on market conditions and performance
+    - **Strategy Optimization Integration**: Seamless integration with backtesting and optimization engines for continuous improvement
+- Strategy Compliance & Governance
+    - **Strategy Approval Workflow**: Multi-stage approval workflow for strategy deployment with risk and compliance review
+    - **Strategy Audit Trail**: Complete audit trail of strategy changes, parameter updates, and performance history
+    - **Regulatory Compliance**: Automated regulatory compliance checking with reporting and exception handling
+    - **Strategy Documentation**: Automated strategy documentation generation with performance attribution and risk analysis
+    - **Version Control Integration**: Integration with version control systems for strategy code and configuration management
+    - **Change Management**: Structured change management process for strategy updates with rollback capabilities
+    - **Performance Reporting**: Automated performance reporting with benchmark comparison and statistical analysis
+- Scope
+    - Comprehensive strategy management with advanced lifecycle controls and performance analytics
+    - Multi-timeframe strategy support with dynamic parameter optimization and risk management
+    - High-fidelity paper trading with realistic market simulation and performance attribution
+    - Real-time monitoring and control with predictive analytics and automated decision making
+- Configuration
+    - `STRATEGY_ENGINE_THREADS`, `STRATEGY_MAX_INSTANCES`, `STRATEGY_STATE_RETENTION_DAYS`, `STRATEGY_HEARTBEAT_INTERVAL_MS`
+    - `STRATEGY_PERFORMANCE_AGGREGATION_ENABLED`, `STRATEGY_RISK_INTEGRATION_ENABLED`, `STRATEGY_PAPER_TRADING_FIDELITY`
+    - `STRATEGY_SIGNAL_VALIDATION_ENABLED`, `STRATEGY_AUTO_OPTIMIZATION_ENABLED`, `STRATEGY_COMPLIANCE_CHECKING_ENABLED`
+    - `STRATEGY_AUDIT_TRAIL_RETENTION_DAYS`, `STRATEGY_DEPLOYMENT_APPROVAL_REQUIRED`, `STRATEGY_VERSION_CONTROL_ENABLED`
+- SLOs
+    - Strategy initialization latency < 500ms for 99% of strategies
+    - Signal generation latency < 100ms for 99% of signals
+    - Strategy state persistence < 50ms for 99% of state updates
+    - Performance metrics updated within 1 second of signal generation
+    - Health check failures detected within 30 seconds of occurrence
+- Acceptance & Tests
+    - All strategy configurations validate against schema with appropriate error messages
+    - Strategy performance metrics accurately reflect actual trading performance
+    - Paper trading simulation produces realistic results comparable to live trading
+    - Strategy state persistence maintains consistency across system restarts
+    - Multi-strategy coordination respects portfolio-level constraints and risk limits
+    - Strategy deployment and rollback processes execute without data loss
+- Failure Modes & Recovery
+    - **Strategy Execution Failures**: Automatic fallback to safe mode with position flattening and notification
+    - **Signal Generation Errors**: Graceful degradation with signal validation bypass and manual intervention alerts
+    - **State Corruption**: Automatic state recovery from last known good checkpoint with audit logging
+    - **Performance Degradation**: Dynamic resource reallocation and strategy optimization parameter adjustment
+    - **Market Data Disruptions**: Use cached data with appropriate staleness warnings and conservative signal generation
+
+## 3.20. Strategy Optimisation & Backtesting
+
+- Advanced Hyperparameter Optimization Framework
+    - **Multi-algorithm Optimization Engine**: Grid Search, Random Search, Bayesian Optimization, Genetic Algorithms, and Particle Swarm Optimization
+    - **Intelligent Parameter Space Exploration**: Adaptive parameter space exploration with smart sampling and early stopping mechanisms
+    - **Multi-objective Optimization**: Simultaneous optimization of return, risk, Sharpe ratio, drawdown, and custom performance metrics
+    - **Parallel Optimization Processing**: Distributed optimization across multiple workers with intelligent load balancing and resource allocation
+    - **Advanced Search Strategies**: Hyperband, BOHB (Bayesian Optimization + Hyperband), and successive halving for efficient search
+    - **Constrained Optimization**: Support for parameter constraints, business rules, and regulatory requirements during optimization
+    - **Meta-learning Integration**: Transfer learning from previous optimizations and similar strategies to accelerate convergence
+- Advanced Backtesting Framework
+    - **High-fidelity Market Simulation**: Realistic market simulation with order book modeling, liquidity simulation, and market impact analysis
+    - **Multi-period Backtesting**: Rolling window backtesting, expanding window backtesting, and anchored backtesting
+    - **Statistical Robustness Testing**: Monte Carlo simulations, bootstrap analysis, and permutation testing for statistical significance
+    - **Walk-forward Analysis**: Rolling optimization with out-of-sample validation and performance persistence testing
+    - **Market Regime Analysis**: Backtesting across different market regimes (bull, bear, volatile, calm) with regime detection
+    - **Survivorship Bias Correction**: Proper handling of delisted securities, corporate actions, and database changes
+    - **Transaction Cost Modeling**: Comprehensive transaction cost modeling including bid-ask spread, market impact, and timing costs
+- Intelligent Optimization Algorithms
+    - **Bayesian Optimization with Gaussian Processes**: Efficient optimization using probabilistic models and acquisition functions
+    - **Hyperband and BOHB**: Multi-fidelity optimization with early stopping and resource allocation
+    - **Genetic Algorithms**: Evolutionary optimization with crossover, mutation, and selection operators
+    - **Particle Swarm Optimization**: Swarm intelligence optimization with global and local search capabilities
+    - **Simulated Annealing**: Stochastic optimization with temperature scheduling and acceptance criteria
+    - **Reinforcement Learning Optimization**: Policy gradient and Q-learning approaches for strategy optimization
+    - **Multi-objective Pareto Optimization**: Pareto frontier discovery for multi-objective optimization problems
+- Comprehensive Performance Analysis
+    - **Multi-dimensional Performance Metrics**: Return, risk, Sharpe ratio, Sortino ratio, Calmar ratio, Information ratio, and custom metrics
+    - **Statistical Significance Testing**: T-tests, Mann-Whitney U tests, bootstrap confidence intervals, and permutation tests
+    - **Risk-adjusted Performance Analysis**: Risk-adjusted returns with multiple risk measures and confidence intervals
+    - **Performance Attribution**: Attribution analysis by parameter, market condition, timeframe, and instrument
+    - **Robustness Testing**: Parameter stability analysis, sensitivity analysis, and stress testing
+    - **Overfitting Detection**: Multiple testing correction, out-of-sample validation, and information ratio analysis
+    - **Performance Persistence**: Analysis of performance persistence across different time periods and market conditions
+- Intelligent Optimization Features
+    - **Adaptive Search Space Refinement**: Dynamic refinement of search space based on intermediate results and convergence analysis
+    - **Multi-fidelity Optimization**: Use of low-fidelity evaluations for initial screening and high-fidelity for promising candidates
+    - **Transfer Learning**: Leverage knowledge from previous optimizations and similar strategies to accelerate convergence
+    - **Ensemble Optimization**: Combine multiple optimization algorithms for robust parameter discovery
+    - **Real-time Optimization**: Continuous optimization during live trading with safe parameter updates
+    - **Robustness Optimization**: Optimize for parameter stability and performance robustness across market conditions
+    - **Constraint-aware Optimization**: Respect regulatory, risk, and business constraints during optimization
+- Advanced Validation & Testing
+    - **Cross-validation Framework**: K-fold cross-validation, time series cross-validation, and blocked cross-validation
+    - **Out-of-sample Testing**: Multiple out-of-sample testing periods with statistical significance testing
+    - **Stress Testing**: Parameter performance under extreme market conditions and black swan events
+    - **Parameter Stability Analysis**: Analysis of parameter stability across different time periods and market regimes
+    - **Overfitting Detection**: Multiple hypothesis testing correction, information ratio analysis, and performance degradation testing
+    - **Walk-forward Validation**: Rolling window validation with performance persistence analysis
+    - **Monte Carlo Validation**: Statistical validation using bootstrap and Monte Carlo methods
+- Scope
+    - Advanced hyperparameter optimization with multiple algorithms and intelligent search strategies
+    - Comprehensive backtesting framework with high-fidelity market simulation and statistical validation
+    - Multi-objective optimization with constraint handling and robustness testing
+    - Complete performance analysis with overfitting detection and out-of-sample validation
+- Configuration
+    - `OPTIMIZATION_ALGORITHMS_ENABLED`, `OPTIMIZATION_MAX_ITERATIONS`, `OPTIMIZATION_CONVERGENCE_THRESHOLD`
+    - `OPTIMIZATION_PARALLEL_WORKERS`, `OPTIMIZATION_EARLY_STOPPING_ENABLED`, `OPTIMIZATION_TRANSFER_LEARNING_ENABLED`
+    - `BACKTEST_FIDELITY_LEVEL`, `BACKTEST_STATISTICAL_VALIDATION_ENABLED`, `BACKTEST_MONTE_CARLO_SIMULATIONS`
+    - `WALK_FORWARD_ANALYSIS_ENABLED`, `OVERFITTING_DETECTION_ENABLED`, `PARAMETER_STABILITY_TESTING_ENABLED`
+- SLOs
+    - Hyperparameter optimization convergence within 100 iterations for 95% of strategies
+    - Backtesting execution speed > 1000x real-time for single-threaded execution
+    - Statistical validation completed within 5 minutes of backtest completion
+    - Optimization results available within 30 minutes for standard parameter spaces
+    - Monte Carlo simulation convergence within 1000 simulations with 95% confidence
+- Acceptance & Tests
+    - Optimization algorithms converge to optimal parameters with statistical significance
+    - Backtesting results are reproducible with deterministic execution and fixed seeds
+    - Out-of-sample performance validates in-sample optimization results
+    - Parameter optimization shows stability across different time periods
+    - Overfitting detection correctly identifies over-optimized strategies
+    - Computational efficiency meets performance targets for large parameter spaces
+- Failure Modes & Recovery
+    - **Optimization Convergence Failures**: Fallback to grid search or random search with notification
+    - **Backtesting Data Quality Issues**: Use data quality scoring with appropriate warnings and conservative assumptions
+    - **Statistical Validation Failures**: Alert quantitative team and use previous validated parameters
+    - **Computational Resource Exhaustion**: Graceful degradation with reduced parameter space and early stopping
+    - **Overfitting Detection Failures**: Conservative parameter selection with wider confidence intervals
+
+## 3.21. Backtesting Fidelity Enhancements
+
+- Market Microstructure
+    - Simulate bid/ask spread, order book depth, and queue position effects on fills
+    - Model partial fills and cancellations; respect tick size, lot constraints, and price bands
+- Execution Modeling
+    - Latency model calibrated from live (network + processing); configurable slippage models (time-based, points, percent)
+    - Liquidity-aware fills using historical volume and depth; avoid overestimating fill rates
+- Validation & Gating
+    - Walk-forward analysis with rolling windows; mandatory out-of-sample evaluation
+    - Strategy deployment gates: minimum Sharpe/Calmar, max drawdown, stability tests, and robustness checks
+- Reproducibility
+    - Deterministic runs with fixed seeds; freeze-time utilities for backtests; environment capture for audit
+
+## 3.22. Reconciliation
+
+- On-demand Reconciliation Support via CLI
+    - Implement a periodic or on-demand process to reconcile the application's view of orders and positions with the actual state at the broker.
+    - LOG all RECONCILIATION statuses
+    - Reconciliation playbook: compare orders/positions/holdings; resolve discrepancies idempotently
+    - Scheduling: periodic cadence configurable; manual triggers with scope (instrument, date range)
+    - Audit trail of corrections; alerts on unresolved mismatches
+- Scope
+    - Periodic and on-demand reconciliation of system state with broker state
+- Configuration
+    - `RECON_SCHEDULE_CRON`, `RECON_SCOPE_DEFAULT`, `RECON_ALERT_ON_MISMATCH`
+- Acceptance & Tests
+    - Discrepancy resolution idempotent; unresolved mismatches alerted; logs complete
+
+## 3.23. Monitoring & CLI Dashboard
+
+- Standardized Monitoring Architecture
+    - Unified metrics collection across all components with consistent labeling and dimensions
+    - Centralized metric naming convention: `{component}_{operation}_{metric_type}`
+    - Standard metric dimensions: `broker_id`, `instrument`, `strategy_id`, `user_id`, `environment`
+    - Consistent metric types: counters, gauges, histograms, summaries with standardized buckets
+    - Single monitoring interface contract across all adapters and components
+    - Standardized health check endpoints with consistent response formats
+    - Unified alerting rules with broker-aware thresholds and escalation paths
+- Real-time CLI Dashboard with Standardized Metrics
+    - Provides a dynamic, updating view in the CLI for key metrics like current P&L, open positions, margin utilization, and worker/queue status
+    - Use third party plugins if required to generate CLI DASHBOARD
+    - Standardized metric panels with consistent formatting and refresh behavior
+- CLI Dashboard should give parallel UI view of the following with standardized contracts
+    - Workers (metrics with standard worker_status, worker_throughput, worker_error_rate)
+    - Queues (pending messages, success & failure counts with standard queue_depth, queue_latency metrics)
+    - Current session ongoing POSITION DATA with standard position_summary, position_pnl metrics
+    - Current session Profit and Loss Data with standard pnl_realized, pnl_unrealized, pnl_total metrics
+    - Current session Brokerage & Fees with standard fees_total, fees_per_trade metrics
+    - Current session average holding period with standard holding_time_avg, holding_time_p95 metrics
+    - Current session slippage i.e. difference between intial order for position and final successful order execution (delay in seconds, slippage in points, slippage in costs) with standard slippage_time, slippage_points, slippage_cost metrics
+    - ALL metrics should autorefresh every second with consistent update intervals
+    - Data refresh SLOs: 1s update intervals with p95 render latency ≤ 500ms
+    - Drill-down and filtering per instrument/strategy; secure views based on RBAC
+    - Fail-safe mode: display last known state when backends degrade; indicate staleness
+    - Standardized metric aggregation functions: sum, avg, p50, p95, p99, rate, increase
+- Standardized Metric Collection
+    - **Performance Metrics**
+        - API latency: `api_request_duration_seconds{method, endpoint, status_code}`
+        - Database queries: `db_query_duration_seconds{operation, table}`
+        - Cache operations: `cache_operation_duration_seconds{operation, hit_miss}`
+        - Queue processing: `queue_processing_duration_seconds{queue_name, status}`
+    - **Business Metrics**
+        - Order metrics: `orders_total{broker_id, instrument, status, order_type}`
+        - P&L metrics: `pnl_amount{broker_id, instrument, realized_unrealized}`
+        - Strategy metrics: `strategy_signals_total{strategy_id, signal_type, instrument}`
+        - Risk metrics: `risk_exposure_amount{broker_id, instrument, risk_type}`
+    - **System Metrics**
+        - Resource usage: `system_cpu_usage_percent`, `system_memory_usage_bytes`
+        - Worker metrics: `worker_tasks_total{worker_type, status}`, `worker_uptime_seconds`
+        - Queue metrics: `queue_depth_messages{queue_name}`, `queue_age_seconds{queue_name}`
+- Standardized Health Checks
+    - **Component Health**: `GET /health/{component}` with standard response format
+    - **Dependency Health**: Automated health checking of all external dependencies
+    - **Circuit Breaker Status**: Standardized circuit breaker state reporting
+- Standardized Alerting Rules
+    - **SLO-based Alerts**: Consistent alert naming: `slo_breach_{component}_{metric}`
+    - **Error Rate Alerts**: `error_rate_threshold_exceeded{broker_id, component}`
+    - **Performance Alerts**: `latency_slo_breach{broker_id, component, percentile}`
+    - **Business Logic Alerts**: `business_rule_violation{broker_id, rule_type}`
+    - **Escalation Paths**: Standardized escalation with broker-aware routing
+- Monitoring Integration Contracts
+    - **Metric Export**: Standardized Prometheus/OpenMetrics format with consistent labeling
+    - **Log Correlation**: Standardized trace_id format across all monitoring systems
+    - **Dashboard Templates**: Reusable dashboard templates for new broker integrations
+    - **Alert Templates**: Standardized alert rule templates with broker parameterization
+- Scope
+    - Real-time operational visibility for workers, queues, positions, and P&L with standardized contracts
+    - Unified monitoring interface across all platform components
+    - Consistent metric collection, health checking, and alerting patterns
+- Configuration
+    - `DASHBOARD_REFRESH_MS`, `DASHBOARD_RBAC_ENABLED`, `DASHBOARD_FAILSAFE`
+    - `MONITORING_METRIC_PREFIX`, `MONITORING_LABEL_STANDARDIZATION_ENABLED`
+    - `HEALTH_CHECK_TIMEOUT_MS`, `ALERT_EVALUATION_INTERVAL_MS`
+    - `METRIC_EXPORT_FORMAT`
+- SLOs
+    - Metric collection latency p95 ≤ 100ms across all components
+    - Health check response time p95 ≤ 500ms
+    - Dashboard render latency p95 ≤ 500ms with 1s refresh intervals
+    - Alert evaluation latency p95 ≤ 30s
+- Acceptance & Tests
+    - All components expose metrics in standardized format with consistent labeling
+    - Health checks return consistent response formats across all adapters
+    - Alert rules are parameterized and reusable across broker integrations
+    - Dashboard templates work uniformly for all brokers
+    - p95 render latency ≤ 500ms; RBAC hides restricted views; staleness indicators shown when data is outdated
+
+## 3.24. CLI Requirements (Commands)
+
+- Standardized CLI Contract Architecture
+    - Unified command structure: `{domain}:{action}:{subaction}` with consistent parameter patterns
+    - Standardized response envelope across all commands with metadata and data separation
+    - Consistent error handling with structured error codes and detailed messages
+    - Standardized idempotency patterns with deterministic key generation
+    - Uniform pagination and filtering interfaces across list operations
+    - Consistent resource identification using canonical symbols and UUIDs
+    - Standardized async operation patterns with job tracking and status polling
+- General Command Standards
+    - All commands support `--dry-run`, `--trace-id`, `--output=json|table`, `--timeout`, `--env`, `--broker`
+    - RBAC enforced for privileged operations; audit logs for every state-changing command
+    - Idempotent operations with deterministic keys: `{broker}:{domain}:{action}:{resource_id}:{timestamp}`
+    - Configuration file support: `~/.trader/cli.json` overrides env defaults; precedence: flags > config > env
+    - Exit codes standardized: `0` success, `2` validation, `3` auth, `4` not found, `5` conflict, `6` rate limit, `7` timeout
+- Idempotency Standards
+    - **Deterministic Key Generation**: `idempotency_key = sha256("{broker}:{user}:{command}:{resource}:{timestamp}")`
+    - **Idempotency Window**: 24-hour window for replay protection with configurable TTL
+    - **Response Caching**: Idempotent responses cached with original request signature
+    - **Conflict Detection**: Clear conflict reporting with existing resource references
+    - **Retry Safety**: All mutating operations support safe retries with idempotency keys
+    - **Idempotency Validation**: Server-side validation ensures key uniqueness and prevents duplicate operations
+- Standardized Resource Operations
+    - **Create Operations**: `cli:{domain}:create --name ... --config ...` with immediate sync validation
+    - **Update Operations**: `cli:{domain}:update {id} --config ...` with optimistic locking
+    - **Delete Operations**: `cli:{domain}:delete {id} --force` with soft delete by default
+    - **List Operations**: `cli:{domain}:list --filter ... --sort ... --page ...` with consistent filtering
+    - **Status Operations**: `cli:{domain}:status {id}` with standardized status reporting
+    - **Validation Operations**: `cli:{domain}:validate --config ...` with dry-run capability
+- System & Config
+    - `cli:init` — initialize database, run migrations, verify connectivity
+        - Params: `--env` (required), `--dry-run` (optional)
+        - Success: exit code `0`; Failure: non-zero with structured error
+    - `cli:config:export` — export current configuration to JSON
+        - Params: `--path` (optional)
+    - `cli:config:import` — import configuration with schema validation
+        - Params: `--path` (required), `--validate-only` (optional)
+- Instruments
+    - `cli:instruments:refresh` — fetch and persist latest instruments
+        - Params: `--force` (optional)
+    - `cli:instruments:list` — filterable list with tradability/lot size
+        - Params: `--tradable` (optional), `--derivatives` (optional)
+- Market Data
+    - `cli:ticks:subscribe --instrument ...` — subscribe instrument(s); auto-underlying
+        - Params: `--instrument` (required, repeatable)
+    - `cli:ticks:unsubscribe --instrument ...` — unsubscribe instrument(s)
+        - Params: `--instrument` (required, repeatable)
+    - `cli:ticks:status` — show websocket and subscription health
+- Historical Data
+    - `cli:historical:fetch --instrument ... --from ... --to ...` — resumable fetch
+        - Params: `--instrument` (required), `--from` (required), `--to` (required), `--interval` (optional)
+    - `cli:historical:status --job-id ...` — progress and checkpoints
+        - Params: `--job-id` (required)
+- Candles
+    - `cli:candles:aggregate --instrument ... --interval ...` — run or rebuild aggregation
+        - Params: `--instrument` (required), `--interval` (required)
+    - `cli:candles:rebuild --instrument ... --from ... --to ...` — re-aggregate windows
+        - Params: `--instrument` (required), `--from` (required), `--to` (required), `--interval` (optional)
+- Orders
+    - `cli:order:place --instrument ... --qty ... --price ...` — limit orders with protections
+        - Params: `--instrument` (required), `--qty` (required), `--price` (required), `--trace-id` (optional)
+    - `cli:order:cancel --order-id ...`
+        - Params: `--order-id` (required)
+    - `cli:order:modify --order-id ... --price ... --qty ...`
+        - Params: `--order-id` (required), `--price` (optional), `--qty` (optional)
+    - `cli:order:status --order-id ...`
+        - Params: `--order-id` (required)
+- Portfolio & Risk
+    - `cli:portfolio:positions` — current positions
+    - `cli:risk:set --daily-dd ... --max-concurrent ...` — set global limits
+        - Params: `--daily-dd` (optional), `--max-concurrent` (optional)
+    - `cli:risk:status`
+- Strategy
+    - `cli:strategy:start --name ... --config ... --mode=paper|live`
+        - Params: `--name` (required), `--config` (required), `--mode` (required)
+    - `cli:strategy:stop --name ...`
+        - Params: `--name` (required)
+    - `cli:strategy:pause --name ...` / `cli:strategy:resume --name ...`
+        - Params: `--name` (required)
+    - `cli:strategy:manual:cancel-order --order-id ...`
+        - Params: `--order-id` (required)
+- Optimization & Backtesting
+    - `cli:opt:start --strategy ... --config ...`
+        - Params: `--strategy` (required), `--config` (required)
+    - `cli:opt:resume --job-id ...`
+        - Params: `--job-id` (required)
+    - `cli:opt:status --job-id ...`
+        - Params: `--job-id` (required)
+- Reconciliation
+    - `cli:recon:run --scope=orders|positions|holdings --instrument ... --from ... --to ...`
+        - Params: `--scope` (required), `--instrument` (optional), `--from` (optional), `--to` (optional)
+    - `cli:recon:status --run-id ...`
+        - Params: `--run-id` (required)
+- Workers & Queues
+    - `cli:workers:status` / `cli:workers:restart --name ...`
+        - Params: `--name` (optional)
+    - `cli:queues:list` / `cli:queues:drain --name ...` / `cli:queues:dlq:retry --name ...`
+        - Params: `--name` (optional)
+- Reporting & Dashboard
+    - `cli:reports:generate --range ... --filters ...` — export CSV/JSON
+        - Params: `--range` (required), `--filters` (optional), `--format` (optional)
+    - `cli:dashboard:start` — start real-time CLI dashboard
+- Lifecycle
+    - `cli:shutdown:graceful` — coordinated stop with invariants validation
+
+### 3.24.1. CLI Examples
+
+- Instruments
+    - Refresh instruments
+        - Command: `cli:instruments:refresh --broker dhan --force`
+        - Output (json): `{ "status": "ok", "data": { "updated": 12543, "version": "2025-11-17" }, "error": null }`
+    - List instruments
+        - Command: `cli:instruments:list --broker dhan --tradable --output=json`
+        - Output (json): `{ "status": "ok", "data": [{ "symbol": "NIFTY23DECFUT", "lotSize": 50 }], "error": null }`
+- Market Data
+    - Subscribe ticks
+        - Command: `cli:ticks:subscribe --broker dhan --instrument NIFTY23DECFUT --instrument BANKNIFTY23DEC24500CE`
+        - Output (table): `subscribed: NIFTY23DECFUT, BANKNIFTY23DEC24500CE`
+    - Status
+        - Command: `cli:ticks:status --broker dhan --output=json`
+        - Output (json): `{ "status": "ok", "data": { "ws": "connected", "subscriptions": ["NIFTY23DECFUT"] }, "error": null }`
+- Historical
+    - Fetch
+        - Command: `cli:historical:fetch --broker dhan --instrument NIFTY23DECFUT --from 2025-11-01T09:15:00Z --to 2025-11-10T15:30:00Z --interval 1m`
+        - Output (json): `{ "status": "accepted", "data": { "jobId": "job_123" }, "error": null }`
+- Orders
+    - Place
+        - Command: `cli:order:place --broker dhan --instrument NIFTY23DECFUT --qty 50 --price 22500 --trace-id 123 --idempotency-key 9b1f`
+        - Output (json): `{ "status": "ok", "data": { "orderId": "ord_456", "status": "QUEUED" }, "error": null }`
+    - Modify
+        - Command: `cli:order:modify --broker dhan --order-id ord_456 --price 22510`
+        - Output (json): `{ "status": "ok", "data": { "orderId": "ord_456", "status": "MODIFY_REQUESTED" }, "error": null }`
+    - Cancel
+        - Command: `cli:order:cancel --broker dhan --order-id ord_456`
+        - Output (json): `{ "status": "ok", "data": { "orderId": "ord_456", "status": "CANCEL_REQUESTED" }, "error": null }`
+- Strategy
+    - Start paper run
+        - Command: `cli:strategy:start --broker dhan --name mean-reversion --config strategy.json --mode paper`
+        - Output (json): `{ "status": "ok", "data": { "runId": "run_789" }, "error": null }`
+
+### 3.24.2. CLI Exit Codes & Output Examples
+
+- Exit Codes
+    - `0` — success
+    - `2` — validation error (e.g., `--qty` must be > 0)
+    - `3` — auth error (missing/invalid credentials)
+    - `4` — not found (e.g., unknown `--order-id`)
+    - `5` — conflict (e.g., duplicate `--idempotency-key`)
+    - `6` — rate limited (per-broker quotas exceeded)
+- Output Examples
+    - Validation error (json): `{ "status": "error", "data": null, "error": { "code": "VALIDATION_ERROR", "message": "qty must be > 0" } }`
+    - Conflict (json): `{ "status": "error", "data": null, "error": { "code": "CONFLICT", "message": "duplicate idempotency key" } }`
+
+## 3.25. API Requirements (Endpoints)
+
+- General
+    - Authentication via API KEY/SECRET; `Authorization: Bearer` or HMAC; TLS 1.2+
+    - RBAC per route; rate limiting; correlation `trace_id` header; idempotency via `Idempotency-Key`
+    - Responses in structured JSON aligned to broker response schema; consistent error codes
+    - Standard response envelope: `{ status: "ok|error", data: <object|null>, error: { code, message, details } }`
+    - Status codes: `200` success, `202` accepted for async jobs, `400` validation errors, `401/403` auth/RBAC, `409` conflicts, `429` rate limit, `5xx` server
+    - Versioning: prefix routes with `/v1`; introduce `/v2` for breaking changes with deprecation timelines
+    - Pagination & Filtering: `limit`, `cursor`, `sort`, `order`, field filters; consistent across list endpoints
+- Health & Metrics
+    - `GET /health` — service status
+    - `GET /metrics` — Prometheus-compatible metrics
+- Instruments
+    - `GET /instruments` — list; filters for tradability and derivatives
+        - Query: `tradable`, `derivatives`, `symbol`
+    - `POST /instruments/refresh` — refresh catalog
+- Market Data
+    - `POST /ticks/subscribe` — subscribe instruments
+        - Body: `{ instruments: string[] }`
+    - `POST /ticks/unsubscribe` — unsubscribe instruments
+        - Body: `{ instruments: string[] }`
+    - `GET /ticks/status` — websocket and subscription health
+- Historical Data
+    - `POST /historical/fetch` — start range job
+        - Body: `{ instrument: string, from: string(ISO), to: string(ISO), interval?: string }`
+    - `GET /historical/status/{jobId}` — job progress
+- Candles
+    - `POST /candles/aggregate` — aggregate interval(s)
+        - Body: `{ instrument: string, interval: string, from?: string(ISO), to?: string(ISO) }`
+    - `GET /candles/{instrument}/{interval}` — fetch candles
+        - Query: `from`, `to`, `limit`
+- Orders
+    - `POST /orders` — place limit order
+        - Body: `{ instrument: string, qty: number, price: number, clientOrderId?: string }`
+    - `GET /orders/{id}` — order status
+    - `POST /orders/{id}/cancel`
+    - `POST /orders/{id}/modify`
+        - Body: `{ price?: number, qty?: number }`
+- Portfolio & Risk
+    - `GET /positions`
+    - `POST /risk/limits` — set global limits
+        - Body: `{ dailyDrawdown?: number, maxConcurrent?: number }`
+    - `GET /risk/status`
+- Strategy
+    - `POST /strategy/start`
+        - Body: `{ name: string, config: object, mode: "paper"|"live" }`
+    - `POST /strategy/stop`
+        - Body: `{ name: string }`
+    - `POST /strategy/pause`
+        - Body: `{ name: string }`
+    - `POST /strategy/resume`
+        - Body: `{ name: string }`
+    - `POST /strategy/manual/cancel-order`
+        - Body: `{ orderId: string }`
+- Optimization
+    - `POST /optimization/start`
+        - Body: `{ strategy: string, config: object }`
+    - `POST /optimization/resume`
+        - Body: `{ jobId: string }`
+    - `GET /optimization/status/{jobId}`
+- Reconciliation
+    - `POST /reconciliation/run`
+        - Body: `{ scope: "orders"|"positions"|"holdings", instrument?: string, from?: string(ISO), to?: string(ISO) }`
+    - `GET /reconciliation/status/{runId}`
+- Reporting & Dashboard
+    - `GET /reports/generate` — on-demand report
+        - Query: `range`, `filters`, `format`
+    - `GET /dashboard/stream` — SSE/WebSocket feeds
+- Lifecycle
+    - `POST /shutdown/graceful`
+- Configuration
+    - `GET /config/export`
+    - `POST /config/import`
+        - Body: `{ config: object, validateOnly?: boolean }`
+
+### 3.25.1. API Examples
+
+- Instruments
+    - List instruments
+        - Request: `GET /v1/instruments` with `X-Broker-Id: dhan`
+        - Example: `curl -H 'X-Broker-Id: dhan' 'https://api.local/v1/instruments?tradable=true&symbol=NIFTY'`
+        - Response: `{ "status": "ok", "data": [{ "symbol": "NIFTY23DECFUT", "tradable": true, "lotSize": 50 }], "error": null }`
+- Market Data
+    - Subscribe ticks
+        - Request: `POST /v1/ticks/subscribe` with `X-Broker-Id: dhan`
+        - Example: `curl -X POST -H 'Content-Type: application/json' -H 'X-Broker-Id: dhan' -d '{"instruments":["NIFTY23DECFUT"]}' 'https://api.local/v1/ticks/subscribe'`
+        - Response: `{ "status": "ok", "data": { "subscribed": ["NIFTY23DECFUT"] }, "error": null }`
+- Historical
+    - Start historical fetch
+        - Request: `POST /v1/historical/fetch` with `X-Broker-Id: dhan`
+        - Example: `curl -X POST -H 'Content-Type: application/json' -H 'X-Broker-Id: dhan' -d '{"instrument":"NIFTY23DECFUT","from":"2025-11-01T09:15:00Z","to":"2025-11-10T15:30:00Z","interval":"1m"}' 'https://api.local/v1/historical/fetch'`
+        - Response: `{ "status": "accepted", "data": { "jobId": "job_123" }, "error": null }`
+    - Job status
+        - Request: `GET /v1/historical/status/job_123` with `X-Broker-Id: dhan`
+        - Response: `{ "status": "ok", "data": { "progressPct": 42, "checkpoints": ["2025-11-05T00:00:00Z"] }, "error": null }`
+- Candles
+    - Fetch candles
+        - Request: `GET /v1/candles/NIFTY23DECFUT/1m?from=2025-11-01T09:15:00Z&to=2025-11-10T15:30:00Z` with `X-Broker-Id: dhan`
+        - Response: `{ "status": "ok", "data": [{ "ts":"2025-11-10T15:29:00Z","open":22500,"high":22520,"low":22490,"close":22510,"volume":12345 }], "error": null }`
+- Orders
+    - Place order (idempotent)
+        - Request: `POST /v1/orders` with `X-Broker-Id: dhan` and `Idempotency-Key: 9b1f...`
+        - Example: `curl -X POST -H 'Content-Type: application/json' -H 'X-Broker-Id: dhan' -H 'Idempotency-Key: 9b1f' -d '{"instrument":"NIFTY23DECFUT","qty":50,"price":22500,"clientOrderId":"ABC-123"}' 'https://api.local/v1/orders'`
+        - Response: `{ "status": "ok", "data": { "orderId": "ord_456", "status": "QUEUED" }, "error": null }`
+    - Modify order
+        - Request: `POST /v1/orders/ord_456/modify` with `X-Broker-Id: dhan`
+        - Response: `{ "status": "ok", "data": { "orderId": "ord_456", "status": "MODIFY_REQUESTED" }, "error": null }`
+    - Cancel order
+        - Request: `POST /v1/orders/ord_456/cancel` with `X-Broker-Id: dhan`
+        - Response: `{ "status": "ok", "data": { "orderId": "ord_456", "status": "CANCEL_REQUESTED" }, "error": null }`
+- Strategy
+    - Start strategy
+        - Request: `POST /v1/strategy/start` with `X-Broker-Id: dhan`
+        - Example: `curl -X POST -H 'Content-Type: application/json' -H 'X-Broker-Id: dhan' -d '{"name":"mean-reversion","config":{},"mode":"paper"}' 'https://api.local/v1/strategy/start'`
+        - Response: `{ "status": "ok", "data": { "runId": "run_789" }, "error": null }`
+- Reconciliation
+    - Run reconciliation
+        - Request: `POST /v1/reconciliation/run` with `X-Broker-Id: dhan`
+        - Example: `curl -X POST -H 'Content-Type: application/json' -H 'X-Broker-Id: dhan' -d '{"scope":"orders","instrument":"NIFTY23DECFUT","from":"2025-11-01","to":"2025-11-10"}' 'https://api.local/v1/reconciliation/run'`
+        - Response: `{ "status": "ok", "data": { "runId": "recon_001" }, "error": null }`
+- Reports
+    - Generate report
+        - Request: `GET /v1/reports/generate?range=month&format=json` with `X-Broker-Id: dhan`
+        - Response: `{ "status": "ok", "data": { "summary": { "pnl": 12345.67, "winRate": 0.54 } }, "error": null }`
+
+### 3.25.2. Pagination & Filtering Examples
+
+- Instruments list with cursor
+    - Request: `GET /v1/instruments?limit=50&cursor=abc123&sort=symbol&order=asc` with `X-Broker-Id: dhan`
+    - Response headers: `X-Cursor-Next: def456`, `X-Cursor-Prev: abc123`
+    - Response body: `{ "status": "ok", "data": [ { "symbol": "..." } ], "error": null }`
+- Candles filtered by range
+    - Request: `GET /v1/candles/NIFTY23DECFUT/1m?from=2025-11-01T09:15:00Z&to=2025-11-10T15:30:00Z&limit=500`
+    - Response: `{ "status": "ok", "data": [ { "ts": "..." } ], "error": null }`
+
+### 3.25.3. API Error Codes & Envelope Examples
+
+- Envelope
+    - Success: `{ "status": "ok", "data": { ... }, "error": null }`
+    - Error: `{ "status": "error", "data": null, "error": { "code": "VALIDATION_ERROR", "message": "qty must be > 0", "details": { "field": "qty" } } }`
+- Codes
+    - `VALIDATION_ERROR` — invalid input parameters (HTTP 400)
+    - `AUTH_REQUIRED` — missing/invalid auth (HTTP 401)
+    - `FORBIDDEN` — insufficient RBAC privileges (HTTP 403)
+    - `NOT_FOUND` — resource absent (HTTP 404)
+    - `CONFLICT` — conflicting state/idempotency duplicate (HTTP 409)
+    - `RATE_LIMITED` — quota exceeded (HTTP 429)
+    - `BROKER_ERROR` — upstream broker failure (HTTP 502)
+    - `SERVER_ERROR` — unexpected server failure (HTTP 500)
+- Headers
+    - `X-Broker-Id` — required for broker-scoped routes
+    - `Idempotency-Key` — required for mutating order endpoints; dedup within TTL
+    - `X-Trace-Id` — correlation ID propagated to logs/metrics
+    - `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` — per-broker quotas
+- Examples
+    - Idempotent duplicate
+        - Response: `{ "status": "error", "data": null, "error": { "code": "CONFLICT", "message": "duplicate idempotency key", "details": { "key": "9b1f" } } }`
+
+# 3.26. Edge Cases & Scenarios
+
+- High-Frequency Trading (HFT) scenarios
+    - Handle bursty tick rates with backpressure: auto-throttle downstream workers when queue depth exceeds threshold
+    - Micro-batch tick processing with 10–50ms windows while preserving per-instrument ordering
+    - Strict adherence to broker API rate limits with centralized rate limiter per API category
+    - Idempotent order placement/modification using stable idempotency keys derived from strategy, instrument, and logical order UID
+    - Price snapshot caching for LTP and market depth with p95 freshness ≤ 250ms
+    - Time synchronization across workers via NTP; reject ticks older than configured skew
+- Network latency & disconnections
+    - Detect websocket stalls and high RTT; trigger reconnects on p99 heartbeat latency breach
+    - Graceful degradation: buffer inbound ticks to instrument-specific queues during reconnect windows
+    - Sequence gap detection for ticks; request gap fill via historical fetch worker
+    - Exponential backoff with jitter for API calls and websockets; circuit breaker to avoid thundering herds
+    - Dual websocket workers in active-active with independent subscriptions; on failure, survivor auto-assumes full load
+- Concurrent transaction processing
+    - Instrument-level serialization for order lifecycle while allowing cross-instrument concurrency
+    - Distributed locks for operations that touch shared resources (positions, margins, holdings)
+    - Transaction context propagation (trace ID) across workers to correlate logs and metrics
+    - Enforce idempotency for retries, forked workers, and reconciliation replays
+- Error recovery & rollback
+    - Use saga-like compensating actions for multi-step operations (place → modify → cancel)
+    - Partial fills handled via iterative quantity reconciliation and position state machine
+    - DB transactions for atomic persistence; fall back to outbox pattern for cross-service delivery
+    - Automatic retry with exponential backoff, max attempts per operation, and dead-letter routing
+
+# 3.27.Technical Requirements
+
+- Performance Benchmarks
+    - Tick ingestion throughput: sustain ≥ 10,000 ticks/sec aggregate; p95 end-to-end tick-to-DB latency ≤ 300ms, p99 ≤ 600ms
+    - Candle aggregation: emit completed candles with p95 delay ≤ 500ms after close time for sub-minute intervals; ≤ 2s for minute+ intervals
+    - Order pipeline latency: LTP-to-limit-order submission p95 ≤ 250ms, p99 ≤ 500ms (subject to broker rate limits)
+    - Queueing: per-instrument queue depth p95 ≤ 1,000; drain time under burst ≤ 5s
+    - Worker availability SLO: 99.9% for transactional workers; 99.5% for logging/monitoring workers
+- Security Requirements
+    - Authentication: API KEY and SECRET from environment only; no secrets in code or logs
+    - Transport security: TLS 1.2+ for all external calls; mutual TLS optional for internal services
+    - At-rest encryption for sensitive tables/fields (orders, positions, holdings) and credentials
+    - RBAC for CLI/API with least privilege; privileged operations gated by two-factor approval in production
+    - Audit logging: tamper-evident append-only logs with cryptographic integrity checks and clock sync
+    - Secret management: rotation policy, pluggable backend (env, vault), automatic revocation on compromise
+- Data Integrity Validations
+    - Tick deduplication by instrument+timestamp+sequence; reject out-of-order beyond tolerance
+    - Referential integrity across orders/positions/trades; invariant checks on quantity and average price
+    - Candle validation: OHLCV correctness, no partial candles, no duplicates; checksum per candle
+    - Exactly-once write semantics for transactional records via outbox and idempotency keys
+    - Cache coherence: TTLs and write-behind confirm persistence; pessimistic refresh on stale reads
+- System Monitoring & Alerting
+    - Metrics: queue.depth, worker.lag, ws.reconnects, order.retry_count, latency.p95/p99, error.rate, cache.hit_ratio, db.rps
+    - Logs: structured JSON with correlation IDs; log sampling for high-volume paths; persisted to DB and console
+    - Alerts: threshold-based and anomaly detection; paging for transactional worker failures and reconciliation mismatches
+    - Dashboards: real-time CLI plus external dashboard for SLOs, per-instrument health, and broker API status
+
+# 3.28. Implementation Considerations
+
+- Scalability Architecture
+    - Modular monolith with horizontally scalable background workers; clear bounded contexts (ticks, candles, orders, reconciliation)
+    - Partitioning/sharding of instrument workloads via consistent hashing; isolate hot instruments
+    - Backpressure propagation from DB writers to websocket ingestion; adaptive micro-batch sizing
+    - Read-through cache for DB queries; write-behind queues with retry and dedup
+- Failover & Redundancy
+    - Active-active websocket workers with leader election for subscription orchestration
+    - Heartbeats and health checks for all workers; auto-restart on failure with exponential backoff
+    - Redis high availability (Sentinel/Cluster); DB replication with failover; durable queues with DLQ
+    - Snapshot and auto-resubscribe instrument lists on worker restart; resume from last persisted offset
+- Compliance with Financial Regulations
+    - Adhere to SEBI and exchange guidelines for order placement, risk controls, and auditability
+    - Maintain comprehensive audit trails for all trading actions; configurable retention aligned with regulations
+    - Pre-trade risk checks enforced: margin, max drawdown, max concurrent trades, no short selling
+    - Time synchronization, incident response runbooks, and segregation of paper trading vs live trading
+- Integration with External Trading APIs
+    - Adapter pattern for broker integrations; versioned capabilities and feature flags per broker
+    - Centralized rate limiter and circuit breaker; automatic backoff and fail-fast on repeated errors
+    - Contract tests against sandbox/staging; reconciliation to detect drift between system and broker state
+    - Strict idempotency for all external calls; retries safe without duplication
