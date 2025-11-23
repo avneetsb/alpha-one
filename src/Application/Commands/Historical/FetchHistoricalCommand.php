@@ -10,10 +10,28 @@ use TradingPlatform\Domain\Instrument\Instrument;
 use TradingPlatform\Domain\MarketData\Candle;
 use TradingPlatform\Infrastructure\Logger\LoggerService;
 
+/**
+ * Command: Fetch Historical Data
+ *
+ * Retrieves historical market data (candles) from a broker or external data source
+ * for a specified date range and interval. Used for backtesting and analysis.
+ */
 class FetchHistoricalCommand extends Command
 {
     protected static $defaultName = 'cli:historical:fetch';
 
+    /**
+     * Configure the command.
+     *
+     * @return void
+     */
+    /**
+     * Configure the command options and arguments.
+     *
+     * Defines options for instrument, date range, interval, and broker.
+     *
+     * @return void
+     */
     protected function configure()
     {
         $this->setDescription('Fetch historical data')
@@ -23,17 +41,39 @@ class FetchHistoricalCommand extends Command
             ->addOption('interval', null, InputOption::VALUE_REQUIRED, 'Interval (1m, 5m, etc)', '1m')
             ->addOption('broker', null, InputOption::VALUE_REQUIRED, 'Broker name', 'dhan')
             ->setHelp(
-                "Usage:\n" .
-                "  php bin/console cli:historical:fetch --instrument=RELIANCE --from=2024-01-01T09:15:00Z --to=2024-01-01T15:30:00Z --interval=5m [--broker=dhan]\n\n" .
-                "Options:\n" .
-                "  --instrument   Required. Trading symbol.\n" .
-                "  --from         Required. ISO datetime start.\n" .
-                "  --to           Required. ISO datetime end.\n" .
-                "  --interval     Candle interval (1m, 5m, 15m, 60m, 1d). Default: 1m.\n" .
-                "  --broker       Broker identifier. Default: dhan.\n"
+                "Usage:\n".
+                "  php bin/console cli:historical:fetch --instrument=RELIANCE --from=2024-01-01T09:15:00Z --to=2024-01-01T15:30:00Z --interval=5m [--broker=dhan]\n\n".
+                "Options:\n".
+                "  --instrument   Required. Trading symbol (e.g., RELIANCE).\n".
+                "  --from         Required. Start datetime in ISO 8601 format.\n".
+                "  --to           Required. End datetime in ISO 8601 format.\n".
+                "  --interval     Candle interval (1m, 5m, 15m, 60m, 1d). Default: 1m.\n".
+                "  --broker       Broker identifier (e.g., dhan, zerodha). Default: dhan.\n"
             );
     }
 
+    /**
+     * Execute the command.
+     *
+     * @param  InputInterface  $input  Command input.
+     * @param  OutputInterface  $output  Command output.
+     * @return int Command exit code.
+     */
+    /**
+     * Execute the historical data fetch process.
+     *
+     * Validates the instrument, connects to the broker adapter, fetches candle data,
+     * and persists it to the database. Handles dynamic table names based on interval.
+     *
+     * @param  InputInterface  $input  Command input.
+     * @param  OutputInterface  $output  Command output.
+     * @return int Command exit code.
+     *
+     * @example CLI Usage
+     * ```bash
+     * php bin/console cli:historical:fetch --instrument=NIFTY --from=2023-10-01T09:00:00Z --to=2023-10-01T15:30:00Z
+     * ```
+     */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $symbol = $input->getOption('instrument');
@@ -44,8 +84,9 @@ class FetchHistoricalCommand extends Command
         $logger = LoggerService::getLogger();
 
         $instrument = Instrument::where('symbol', $symbol)->first();
-        if (!$instrument) {
+        if (! $instrument) {
             $output->writeln("<error>Instrument not found: $symbol</error>");
+
             return Command::FAILURE;
         }
 
@@ -54,9 +95,9 @@ class FetchHistoricalCommand extends Command
 
         // In a real implementation, we would call the Broker Adapter to fetch candles
         // For demo, we'll seed some dummy candles
-        
+
         $tableName = "candles_{$interval}";
-        $candle = new Candle();
+        $candle = new Candle;
         $candle->setTable($tableName);
 
         // Dummy data
@@ -78,7 +119,7 @@ class FetchHistoricalCommand extends Command
                 // Use DB facade or model to insert
                 // Since model table is dynamic, we need a fresh instance or use DB query
                 // Using model with setTable:
-                $c = new Candle();
+                $c = new Candle;
                 $c->setTable($tableName);
                 $c->fill($data);
                 $c->save();
@@ -87,7 +128,8 @@ class FetchHistoricalCommand extends Command
             }
         }
 
-        $output->writeln("Fetched and saved candles.");
+        $output->writeln('Fetched and saved candles.');
+
         return Command::SUCCESS;
     }
 }

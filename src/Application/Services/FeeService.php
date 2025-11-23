@@ -2,28 +2,50 @@
 
 namespace TradingPlatform\Application\Services;
 
-use TradingPlatform\Domain\Fees\FeeCalculatorInterface;
 use TradingPlatform\Domain\Fees\Calculators\DhanFeeCalculator;
+use TradingPlatform\Domain\Fees\FeeCalculatorInterface;
 use TradingPlatform\Domain\Fees\Models\FeeCalculation;
 use TradingPlatform\Domain\Fees\Models\FeeReconciliation;
 
 /**
  * Fee Management Service
- * 
- * Central service for all fee-related operations
+ *
+ * Central service for all fee-related operations, including estimation,
+ * calculation, persistence, and reconciliation. Handles broker-specific
+ * fee structures via registered calculators.
+ *
+ * @version 1.0.0
  */
 class FeeService
 {
+    /**
+     * @var array<string, FeeCalculatorInterface> Registered fee calculators.
+     */
     private array $calculators = [];
 
+    /**
+     * FeeService constructor.
+     * Registers default calculators.
+     */
     public function __construct()
     {
         // Register default calculators
-        $this->registerCalculator('dhan', new DhanFeeCalculator());
+        $this->registerCalculator('dhan', new DhanFeeCalculator);
     }
 
     /**
-     * Register a fee calculator for a broker
+     * Register a fee calculator for a broker.
+     *
+     * Allows dynamic registration of fee calculators for different brokers,
+     * enabling the service to support multi-broker environments.
+     *
+     * @param  string  $brokerId  Broker identifier (e.g., 'dhan', 'zerodha').
+     * @param  FeeCalculatorInterface  $calculator  The calculator instance implementing the interface.
+     *
+     * @example Registering a calculator
+     * ```php
+     * $service->registerCalculator('zerodha', new ZerodhaFeeCalculator());
+     * ```
      */
     public function registerCalculator(string $brokerId, FeeCalculatorInterface $calculator): void
     {
@@ -31,11 +53,16 @@ class FeeService
     }
 
     /**
-     * Get calculator for broker
+     * Get calculator for broker.
+     *
+     * @param  string  $brokerId  Broker identifier.
+     * @return FeeCalculatorInterface The fee calculator instance.
+     *
+     * @throws \RuntimeException If no calculator is registered.
      */
     private function getCalculator(string $brokerId): FeeCalculatorInterface
     {
-        if (!isset($this->calculators[$brokerId])) {
+        if (! isset($this->calculators[$brokerId])) {
             throw new \RuntimeException("No fee calculator registered for broker: {$brokerId}");
         }
 
@@ -43,7 +70,24 @@ class FeeService
     }
 
     /**
-     * Estimate pre-trade fees
+     * Estimate pre-trade fees.
+     *
+     * Provides an estimation of the total fees and taxes for a potential order.
+     * Useful for showing "Estimated Charges" in the order placement UI.
+     *
+     * @param  string  $brokerId  Broker identifier.
+     * @param  string  $instrument  Instrument symbol (e.g., 'RELIANCE').
+     * @param  float  $quantity  Order quantity.
+     * @param  float  $price  Order price.
+     * @param  string  $side  Order side ('BUY' or 'SELL').
+     * @param  string  $segment  Trading segment ('intraday', 'delivery', 'futures', 'options').
+     * @return array Fee breakdown including brokerage, taxes, and total.
+     *
+     * @example Estimating fees
+     * ```php
+     * $fees = $service->estimateFees('dhan', 'NIFTY', 50, 19500, 'BUY', 'options');
+     * // Returns: ['brokerage' => 20, 'stt' => 10, 'total' => 35.5, ...]
+     * ```
      */
     public function estimateFees(
         string $brokerId,
@@ -65,7 +109,19 @@ class FeeService
     }
 
     /**
-     * Calculate and persist fees for an order
+     * Calculate and persist fees for an order.
+     *
+     * Calculates the actual fees incurred for an executed order and saves the
+     * breakdown to the database for reporting and reconciliation.
+     *
+     * @param  array  $orderData  Order details including ID, broker, instrument, price, qty, etc.
+     * @return FeeCalculation The persisted fee record.
+     *
+     * @example Persisting fees
+     * ```php
+     * $order = ['broker_id' => 'dhan', 'price' => 100, 'quantity' => 10, ...];
+     * $record = $service->calculateAndPersistFees($order);
+     * ```
      */
     public function calculateAndPersistFees(array $orderData): FeeCalculation
     {
@@ -100,7 +156,21 @@ class FeeService
     }
 
     /**
-     * Get total fees for a date range
+     * Get total fees for a date range.
+     *
+     * Aggregates the total fees incurred across all trades within the specified
+     * date range for a specific broker.
+     *
+     * @param  string  $brokerId  Broker identifier.
+     * @param  \DateTime  $from  Start date.
+     * @param  \DateTime  $to  End date.
+     * @return float Total fees.
+     *
+     * @example Calculating total fees
+     * ```php
+     * $total = $service->getTotalFeesForDateRange('dhan', new DateTime('2023-01-01'), new DateTime('2023-01-31'));
+     * // Returns: 1500.50
+     * ```
      */
     public function getTotalFeesForDateRange(
         string $brokerId,
@@ -113,7 +183,21 @@ class FeeService
     }
 
     /**
-     * Get fee breakdown for a date range
+     * Get fee breakdown for a date range.
+     *
+     * Provides a detailed breakdown of fees (Brokerage, STT, GST, etc.) for
+     * tax reporting and analysis purposes.
+     *
+     * @param  string  $brokerId  Broker identifier.
+     * @param  \DateTime  $from  Start date.
+     * @param  \DateTime  $to  End date.
+     * @return array Breakdown of fee components.
+     *
+     * @example Fee breakdown
+     * ```php
+     * $breakdown = $service->getFeeBreakdownForDateRange('dhan', $start, $end);
+     * // Returns: ['total_brokerage' => 500, 'total_stt' => 200, ...]
+     * ```
      */
     public function getFeeBreakdownForDateRange(
         string $brokerId,
@@ -138,7 +222,22 @@ class FeeService
     }
 
     /**
-     * Reconcile fees with broker statement
+     * Reconcile fees with broker statement.
+     *
+     * Compares the system-calculated fees against the total fees reported in the
+     * broker's daily contract note or ledger. Identifies discrepancies within
+     * a tolerance limit.
+     *
+     * @param  string  $brokerId  Broker identifier.
+     * @param  \DateTime  $date  Reconciliation date.
+     * @param  float  $brokerStatementTotal  Total fees from broker statement.
+     * @return FeeReconciliation The reconciliation record.
+     *
+     * @example Reconciling fees
+     * ```php
+     * $recon = $service->reconcileFees('dhan', new DateTime('2023-10-27'), 150.50);
+     * echo $recon->status; // 'matched' or 'mismatch'
+     * ```
      */
     public function reconcileFees(
         string $brokerId,
@@ -166,7 +265,21 @@ class FeeService
     }
 
     /**
-     * Get fee analytics for a period
+     * Get fee analytics for a period.
+     *
+     * Calculates derived metrics such as average fee per trade to help analyze
+     * trading costs and efficiency.
+     *
+     * @param  string  $brokerId  Broker identifier.
+     * @param  \DateTime  $from  Start date.
+     * @param  \DateTime  $to  End date.
+     * @return array Analytics data including averages.
+     *
+     * @example Fee analytics
+     * ```php
+     * $analytics = $service->getFeeAnalytics('dhan', $start, $end);
+     * echo "Avg Cost: " . $analytics['avg_fee_per_trade'];
+     * ```
      */
     public function getFeeAnalytics(
         string $brokerId,

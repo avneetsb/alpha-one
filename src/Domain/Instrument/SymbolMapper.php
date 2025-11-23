@@ -6,7 +6,7 @@ class SymbolMapper
 {
     // In a real app, this would be backed by a DB table or cache.
     // For demo, we use a simple array map.
-    
+
     private array $map = [
         // Internal Symbol => [Broker => Broker Symbol]
         'NSE:RELIANCE-EQ' => [
@@ -31,6 +31,7 @@ class SymbolMapper
                 return $internal;
             }
         }
+
         return null;
     }
 }

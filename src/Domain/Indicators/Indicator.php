@@ -10,12 +10,12 @@ namespace TradingPlatform\Domain\Indicators;
  * the `calculate` method and may leverage internal caching to avoid
  * recomputation for identical inputs.
  *
- * @package TradingPlatform\Domain\Indicators
  * @version 1.0.0
  */
 abstract class Indicator
 {
     protected array $cache = [];
+
     protected string $cacheKey;
 
     public function __construct()
@@ -26,9 +26,9 @@ abstract class Indicator
     /**
      * Calculate indicator values for given OHLCV dataset.
      *
-     * @param array $data   Array of candles: [{open,high,low,close,volume}, ...]
-     * @param array $params Indicator-specific parameters
-     * @return array        Calculated values (shape defined by indicator)
+     * @param  array  $data  Array of candles: [{open,high,low,close,volume}, ...]
+     * @param  array  $params  Indicator-specific parameters
+     * @return array Calculated values (shape defined by indicator)
      */
     abstract public function calculate(array $data, array $params = []): array;
 

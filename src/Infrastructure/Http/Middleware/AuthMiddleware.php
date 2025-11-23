@@ -3,22 +3,10 @@
 namespace TradingPlatform\Infrastructure\Http\Middleware;
 
 /**
- * JWT Authentication Middleware
+ * Middleware: JWT Authentication
  *
- * Validates Bearer tokens on incoming requests using HMAC-SHA256.
- * Stores decoded payload in `$_SERVER['AUTH_USER']` when valid.
- * Intended for simple deployments; for production consider firebase/php-jwt.
- *
- * @package TradingPlatform\Infrastructure\Http\Middleware
- * @version 1.0.0
- *
- * @example Protect route:
- * $router->addMiddleware(new AuthMiddleware());
- *
- * @example Generate token:
- * $token = $auth->generateToken(['sub' => 'user-123'], 3600);
- *
- * @security Use a strong `JWT_SECRET` and rotate regularly. Prefer HTTPS.
+ * Intercepts incoming requests to validate Bearer tokens.
+ * Decodes the JWT payload and attaches user information to the global state.
  */
 class AuthMiddleware
 {
@@ -30,21 +18,27 @@ class AuthMiddleware
     }
 
     /**
-     * Validate Authorization header and verify JWT.
-     * Returns error array on failure or null on success.
+     * Handle the incoming request.
+     *
+     * Checks for the `Authorization` header, parses the Bearer token,
+     * and verifies its signature and expiration.
+     *
+     * @return array|null Returns error array if auth fails, null if successful.
      */
     public function __invoke(): ?array
     {
         $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
-        
+
         if (empty($authHeader)) {
             http_response_code(401);
+
             return ['error' => 'Authentication required'];
         }
 
         // Extract token from "Bearer <token>"
-        if (!preg_match('/Bearer\s+(.*)$/i', $authHeader, $matches)) {
+        if (! preg_match('/Bearer\s+(.*)$/i', $authHeader, $matches)) {
             http_response_code(401);
+
             return ['error' => 'Invalid authorization header'];
         }
 
@@ -53,9 +47,11 @@ class AuthMiddleware
         try {
             $payload = $this->verifyToken($token);
             $_SERVER['AUTH_USER'] = $payload; // Store user info
+
             return null; // Allow request to proceed
         } catch (\Exception $e) {
             http_response_code(401);
+
             return ['error' => 'Invalid or expired token'];
         }
     }
@@ -67,7 +63,7 @@ class AuthMiddleware
     {
         // Simple JWT verification (in production, use firebase/php-jwt)
         $parts = explode('.', $token);
-        
+
         if (count($parts) !== 3) {
             throw new \Exception('Invalid token format');
         }
@@ -78,7 +74,7 @@ class AuthMiddleware
         $expectedSignature = hash_hmac('sha256', "$header.$payload", $this->secretKey, true);
         $expectedSignature = $this->base64UrlEncode($expectedSignature);
 
-        if (!hash_equals($expectedSignature, $signature)) {
+        if (! hash_equals($expectedSignature, $signature)) {
             throw new \Exception('Invalid signature');
         }
 
@@ -94,12 +90,21 @@ class AuthMiddleware
     }
 
     /**
-     * Generate a signed JWT with an expiration.
+     * Generate a new JWT token.
+     *
+     * @param  array  $payload  Data to encode in the token.
+     * @param  int  $expiresIn  Token validity duration in seconds.
+     * @return string The signed JWT string.
+     *
+     * @example
+     * ```php
+     * $token = $auth->generateToken(['user_id' => 1, 'role' => 'admin']);
+     * ```
      */
     public function generateToken(array $payload, int $expiresIn = 3600): string
     {
         $header = json_encode(['typ' => 'JWT', 'alg' => 'HS256']);
-        
+
         $payload['iat'] = time();
         $payload['exp'] = time() + $expiresIn;
         $payload = json_encode($payload);

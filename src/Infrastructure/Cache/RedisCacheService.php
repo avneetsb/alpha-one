@@ -2,23 +2,31 @@
 
 namespace TradingPlatform\Infrastructure\Cache;
 
-use TradingPlatform\Domain\Cache\CacheInterface;
 use Predis\Client as RedisClient;
+use TradingPlatform\Domain\Cache\CacheInterface;
 
+/**
+ * Class: Redis Cache Service
+ *
+ * Implements the `CacheInterface` using Redis as the backend store.
+ * Supports standard cache operations: get, put, add, increment, and remember.
+ * Handles serialization of complex data types.
+ */
 class RedisCacheService implements CacheInterface
 {
     private RedisClient $redis;
+
     private string $prefix;
 
-    public function __construct(array $config = [])
+    public function __construct(array $config = [], ?RedisClient $client = null)
     {
-        $this->redis = new RedisClient($config);
+        $this->redis = $client ?? new RedisClient($config);
         $this->prefix = $config['prefix'] ?? 'trader:';
     }
 
     private function getKey(string $key): string
     {
-        return $this->prefix . $key;
+        return $this->prefix.$key;
     }
 
     public function get(string $key, $default = null)
@@ -39,6 +47,7 @@ class RedisCacheService implements CacheInterface
 
         if ($ttl) {
             $seconds = $this->getSeconds($ttl);
+
             return (bool) $this->redis->setex($fullKey, $seconds, $serialized);
         }
 
@@ -52,6 +61,7 @@ class RedisCacheService implements CacheInterface
 
         if ($ttl) {
             $seconds = $this->getSeconds($ttl);
+
             // setnx doesn't support TTL natively in older Redis, using set with NX EX
             return (bool) $this->redis->set($fullKey, $serialized, 'EX', $seconds, 'NX');
         }
@@ -84,11 +94,26 @@ class RedisCacheService implements CacheInterface
         return (bool) $this->redis->flushdb();
     }
 
+    /**
+     * Get an item from the cache, or execute the given Closure and store the result.
+     *
+     * @param  string  $key  Cache key.
+     * @param  \DateTimeInterface|\DateInterval|int  $ttl  Time to live.
+     * @param  \Closure  $callback  Closure to execute if key is missing.
+     * @return mixed The cached or fetched value.
+     *
+     * @example
+     * ```php
+     * $value = $cache->remember('users', 60, function () {
+     *     return DB::table('users')->get();
+     * });
+     * ```
+     */
     public function remember(string $key, $ttl, \Closure $callback)
     {
         $value = $this->get($key);
 
-        if (!is_null($value)) {
+        if (! is_null($value)) {
             return $value;
         }
 

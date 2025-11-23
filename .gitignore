@@ -1,5 +1,7 @@
 vendor/
 .env
+.env.testing
+.env.production
 storage/
 storage/logs/
 storage/cache/

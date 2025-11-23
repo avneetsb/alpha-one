@@ -2,20 +2,18 @@
 
 namespace TradingPlatform\Infrastructure\Queue;
 
-use Illuminate\Queue\Capsule\Manager as QueueCapsule;
-use Illuminate\Events\Dispatcher;
 use Illuminate\Container\Container;
+use Illuminate\Queue\Capsule\Manager as QueueCapsule;
 use Illuminate\Redis\RedisManager;
-use Illuminate\Support\Arr;
 
 /**
- * Queue Service Bootstrapper
+ * Class QueueService
  *
+ * Queue Service Bootstrapper.
  * Initializes and provides access to the queue capsule backed by Redis.
  * Supports multiple named queues and connection retrieval for producers
  * and consumers.
  *
- * @package TradingPlatform\Infrastructure\Queue
  * @version 1.0.0
  *
  * @example Boot and push job:
@@ -24,6 +22,9 @@ use Illuminate\Support\Arr;
  */
 class QueueService
 {
+    /**
+     * @var QueueCapsule|null Singleton queue capsule instance.
+     */
     private static ?QueueCapsule $capsule = null;
 
     /**
@@ -35,15 +36,15 @@ class QueueService
             return;
         }
 
-        $container = new Container();
-        $config = require __DIR__ . '/../../../config/queue.php';
-        $dbConfig = require __DIR__ . '/../../../config/database.php'; // For Redis config
+        $container = new Container;
+        $config = require __DIR__.'/../../../config/queue.php';
+        $dbConfig = require __DIR__.'/../../../config/database.php'; // For Redis config
 
         // We need to configure Redis for the queue driver
         $container->bind('redis', function () use ($dbConfig) {
             return new RedisManager(
-                new Container(), 
-                'predis', 
+                new Container,
+                'predis',
                 $dbConfig['redis']
             );
         });
@@ -54,7 +55,7 @@ class QueueService
         // Add connections
         $capsule->addConnection($config['connections']['redis'], 'redis');
 
-        // Set as global to allow Queue::push usage if needed, 
+        // Set as global to allow Queue::push usage if needed,
         // though we prefer dependency injection or the capsule instance.
         $capsule->setAsGlobal();
 
@@ -69,18 +70,23 @@ class QueueService
         if (self::$capsule === null) {
             self::boot();
         }
+
         return self::$capsule;
     }
 
     /**
      * Get a queue connection by name or default.
+     *
+     * @param  string|null  $name  Connection name (optional).
+     * @return \Illuminate\Contracts\Queue\Queue
      */
     public static function getConnection(?string $name = null)
     {
         if ($name === null) {
-            $config = require __DIR__ . '/../../../config/queue.php';
+            $config = require __DIR__.'/../../../config/queue.php';
             $name = $config['default'];
         }
+
         return self::getCapsule()->getConnection($name);
     }
 }

@@ -3,29 +3,28 @@
 namespace TradingPlatform\Infrastructure\Http;
 
 /**
- * Minimal HTTP Router
+ * Class: Minimal HTTP Router
  *
- * Lightweight routing component for REST endpoints. Supports method-based
- * route registration, path parameters, middleware execution, and JSON
- * responses. Intended for simple APIs without a full framework.
- *
- * @package TradingPlatform\Infrastructure\Http
- * @version 1.0.0
- *
- * @example Register routes:
- * $router->get('/instruments/{id}', [$controller, 'show']);
- * $router->post('/orders', [$orderController, 'store']);
- *
- * @example Add middleware:
- * $router->addMiddleware(new AuthMiddleware());
+ * A lightweight, regex-based router for handling REST API requests.
+ * Supports standard HTTP methods (GET, POST, PUT, DELETE), path parameters,
+ * and middleware pipelines.
  */
 class Router
 {
     private array $routes = [];
+
     private array $middleware = [];
 
     /**
      * Register a GET route.
+     *
+     * @param  string  $path  URI path (e.g., '/users/{id}').
+     * @param  callable  $handler  Callback or [Controller, method].
+     *
+     * @example
+     * ```php
+     * $router->get('/health', fn() => ['status' => 'ok']);
+     * ```
      */
     public function get(string $path, callable $handler): void
     {
@@ -97,6 +96,7 @@ class Router
                 $pattern = $this->convertToRegex($route['path']);
                 if (preg_match($pattern, $path, $matches)) {
                     array_shift($matches); // Remove full match
+
                     return $route['handler'](...$matches);
                 }
             }
@@ -109,12 +109,14 @@ class Router
     {
         // Convert /path/{id} to /path/([^/]+)
         $pattern = preg_replace('/\{([^}]+)\}/', '([^/]+)', $path);
-        return '#^' . $pattern . '$#';
+
+        return '#^'.$pattern.'$#';
     }
 
     private function notFound(): array
     {
         http_response_code(404);
+
         return ['error' => 'Route not found'];
     }
 

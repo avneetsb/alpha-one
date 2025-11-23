@@ -6,17 +6,29 @@ use TradingPlatform\Infrastructure\Cache\RedisAdapter;
 use TradingPlatform\Infrastructure\Logger\LoggerService;
 
 /**
- * Log analytics and processing pipeline
+ * Class LogAnalyticsService
+ *
+ * Log analytics and processing pipeline.
+ * Tracks error patterns, performance metrics, and security events by analyzing
+ * log entries in real-time. Uses Redis for high-speed aggregation and alerting.
+ *
+ * @version 1.0.0
  */
 class LogAnalyticsService
 {
     private RedisAdapter $redis;
+
     private \Monolog\Logger $logger;
-    
+
     private const ERROR_PATTERN_KEY = 'analytics:log:error_patterns';
+
     private const PERF_METRICS_KEY = 'analytics:log:performance';
+
     private const SECURITY_EVENTS_KEY = 'analytics:log:security';
 
+    /**
+     * LogAnalyticsService constructor.
+     */
     public function __construct()
     {
         $this->redis = RedisAdapter::getInstance();
@@ -24,7 +36,22 @@ class LogAnalyticsService
     }
 
     /**
-     * Process log entry for analytics
+     * Process log entry for analytics.
+     *
+     * Analyzes a single log entry to extract insights such as error patterns,
+     * performance metrics, and security threats.
+     *
+     * @param  array  $logEntry  The log entry data (level, message, context).
+     *
+     * @example Processing a log
+     * ```php
+     * $entry = [
+     *     'level' => 'ERROR',
+     *     'message' => 'Connection timeout',
+     *     'context' => ['duration_ms' => 500]
+     * ];
+     * $service->processLogEntry($entry);
+     * ```
      */
     public function processLogEntry(array $logEntry): void
     {
@@ -47,57 +74,84 @@ class LogAnalyticsService
         $this->checkAlertConditions($logEntry);
     }
 
+    /**
+     * Track an error pattern.
+     *
+     * @param  array  $logEntry  Log entry data.
+     */
     private function trackErrorPattern(array $logEntry): void
     {
         $pattern = $this->extractErrorPattern($logEntry);
-        
+
         // Increment error count for this pattern
-        $key = self::ERROR_PATTERN_KEY . ':' . md5($pattern);
+        $key = self::ERROR_PATTERN_KEY.':'.md5($pattern);
         $this->redis->getClient()->hincrby($key, 'count', 1);
         $this->redis->getClient()->hset($key, 'last_seen', time());
         $this->redis->getClient()->hset($key, 'pattern', $pattern);
         $this->redis->getClient()->expire($key, 86400); // 24 hour TTL
     }
 
+    /**
+     * Extract a normalized error pattern from a log message.
+     *
+     * @param  array  $logEntry  Log entry data.
+     * @return string Normalized error pattern.
+     */
     private function extractErrorPattern(array $logEntry): string
     {
         $message = $logEntry['message'] ?? '';
-        
+
         // Normalize error message to extract pattern
         // Remove dynamic parts like IDs, timestamps, numbers
         $pattern = preg_replace('/\d+/', 'N', $message);
         $pattern = preg_replace('/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/i', 'UUID', $pattern);
-        
+
         return substr($pattern, 0, 200); // Limit length
     }
 
+    /**
+     * Track a performance metric.
+     *
+     * @param  array  $logEntry  Log entry data.
+     */
     private function trackPerformanceMetric(array $logEntry): void
     {
         $operation = $logEntry['context']['operation'] ?? 'unknown';
         $duration = $logEntry['context']['duration_ms'] ?? 0;
-        
+
         // Store in time-series format for trending
         $timestamp = time();
-        $key = self::PERF_METRICS_KEY . ':' . $operation;
-        
+        $key = self::PERF_METRICS_KEY.':'.$operation;
+
         $this->redis->getClient()->zadd($key, [$timestamp => $duration]);
         $this->redis->getClient()->expire($key, 86400); // 24 hour retention
     }
 
+    /**
+     * Check if a log entry represents a security event.
+     *
+     * @param  array  $logEntry  Log entry data.
+     * @return bool True if security event, false otherwise.
+     */
     private function isSecurityEvent(array $logEntry): bool
     {
-       $message = strtolower($logEntry['message'] ?? '');
+        $message = strtolower($logEntry['message'] ?? '');
         $securityKeywords = ['unauthorized', 'forbidden', 'auth failed', 'invalid token', 'brute force', 'sql injection'];
-        
+
         foreach ($securityKeywords as $keyword) {
             if (str_contains($message, $keyword)) {
                 return true;
             }
         }
-        
+
         return false;
     }
 
+    /**
+     * Track a security event.
+     *
+     * @param  array  $logEntry  Log entry data.
+     */
     private function trackSecurityEvent(array $logEntry): void
     {
         $event = [
@@ -106,29 +160,37 @@ class LogAnalyticsService
             'ip' => $logEntry['context']['ip'] ?? 'unknown',
             'user_id' => $logEntry['context']['user_id'] ?? null,
         ];
-        
+
         $this->redis->getClient()->lpush(self::SECURITY_EVENTS_KEY, [json_encode($event)]);
         $this->redis->getClient()->ltrim(self::SECURITY_EVENTS_KEY, 0, 999); // Keep last 1000
-        
+
         // Alert on security events
         $this->logger->alert('Security event detected', $event);
     }
 
+    /**
+     * Check for alert conditions based on the log entry.
+     *
+     * @param  array  $logEntry  Log entry data.
+     */
     private function checkAlertConditions(array $logEntry): void
     {
         // Check error rate threshold
-        $errorCount = $this->redis->getClient()->hget(self::ERROR_PATTERN_KEY . ':count', 'total') ?? 0;
-        
+        $errorCount = $this->redis->getClient()->hget(self::ERROR_PATTERN_KEY.':count', 'total') ?? 0;
+
         if ($errorCount > 100) { // Alert if more than 100 errors in window
             $this->logger->alert('High error rate detected', [
                 'error_count' => $errorCount,
-                'window' => '1 minute'
+                'window' => '1 minute',
             ]);
         }
     }
 
     /**
-     * Get error patterns for analysis
+     * Get error patterns for analysis.
+     *
+     * @param  int  $limit  Maximum number of patterns to return.
+     * @return array Error patterns.
      */
     public function getErrorPatterns(int $limit = 10): array
     {
@@ -138,15 +200,28 @@ class LogAnalyticsService
     }
 
     /**
-     * Get performance metrics
+     * Get performance metrics for an operation.
+     *
+     * Retrieves aggregated performance statistics (p50, p95, max) for a specific
+     * operation over a given time window.
+     *
+     * @param  string  $operation  Operation name (e.g., 'order_placement').
+     * @param  int  $hours  Number of hours to look back.
+     * @return array Performance metrics including percentiles.
+     *
+     * @example Fetching metrics
+     * ```php
+     * $metrics = $service->getPerformanceMetrics('order_placement');
+     * // Returns: ['p95' => 150, 'max' => 500, 'count' => 1000]
+     * ```
      */
     public function getPerformanceMetrics(string $operation, int $hours = 24): array
     {
-        $key = self::PERF_METRICS_KEY . ':' . $operation;
+        $key = self::PERF_METRICS_KEY.':'.$operation;
         $fromTime = time() - ($hours * 3600);
-        
+
         $metrics = $this->redis->getClient()->zrangebyscore($key, $fromTime, '+inf', ['withscores' => true]);
-        
+
         if (empty($metrics)) {
             return [];
         }
@@ -154,7 +229,7 @@ class LogAnalyticsService
         // Calculate p50, p95, p99
         $durations = array_values($metrics);
         sort($durations);
-        
+
         return [
             'count' => count($durations),
             'p50' => $this->percentile($durations, 50),
@@ -164,12 +239,22 @@ class LogAnalyticsService
         ];
     }
 
+    /**
+     * Calculate a percentile from a list of values.
+     *
+     * @param  array  $values  List of values.
+     * @param  float  $percentile  Percentile to calculate (0-100).
+     * @return float Calculated percentile value.
+     */
     private function percentile(array $values, float $percentile): float
     {
         $count = count($values);
-        if ($count === 0) return 0;
-        
+        if ($count === 0) {
+            return 0;
+        }
+
         $index = ceil(($percentile / 100) * $count) - 1;
+
         return $values[max(0, min($index, $count - 1))];
     }
 }

@@ -6,17 +6,28 @@ use GuzzleHttp\Client;
 use TradingPlatform\Domain\Order\Order;
 use TradingPlatform\Infrastructure\Logger\LoggerService;
 
+/**
+ * Class: Dhan Order Adapter
+ *
+ * Specialized adapter for order management operations with Dhan.
+ * Handles order placement, modification, and cancellation.
+ * Maps internal `Order` entities to the broker's API payload format.
+ */
 class DhanOrderAdapter
 {
     private Client $client;
+
     private $logger;
 
-    public function __construct(string $accessToken)
+    /**
+     * DhanOrderAdapter constructor.
+     */
+    public function __construct(string $accessToken, ?Client $client = null, ?\Psr\Log\LoggerInterface $logger = null)
     {
-        $this->logger = LoggerService::getLogger();
-        $config = require __DIR__ . '/../../../../config/broker.php';
-        
-        $this->client = new Client([
+        $this->logger = $logger ?? LoggerService::getLogger();
+        $config = require __DIR__.'/../../../../config/broker.php';
+
+        $this->client = $client ?? new Client([
             'base_uri' => $config['dhan']['base_uri'],
             'headers' => [
                 'access-token' => $accessToken,
@@ -27,6 +38,22 @@ class DhanOrderAdapter
         ]);
     }
 
+    /**
+     * Place a new order.
+     *
+     * Maps the domain `Order` object to the Dhan API request payload and submits it.
+     *
+     * @param  Order  $order  The order entity to place.
+     * @return array The API response containing the broker's order ID.
+     *
+     * @throws \Exception If the API request fails.
+     *
+     * @example
+     * ```php
+     * $response = $dhanOrderAdapter->placeOrder($order);
+     * echo "Broker Order ID: " . $response['orderId'];
+     * ```
+     */
     public function placeOrder(Order $order): array
     {
         // Map internal order to Dhan payload
@@ -38,12 +65,12 @@ class DhanOrderAdapter
             'productType' => 'INTRADAY', // Simplified
             'orderType' => $order->type,
             'validity' => $order->validity,
-            'securityId' => (string)$order->instrument_id, // Needs mapping to Broker Security ID
+            'securityId' => (string) $order->instrument_id, // Needs mapping to Broker Security ID
             'quantity' => $order->qty,
             'price' => $order->price,
         ];
 
-        $this->logger->info("Placing order on Dhan", $payload);
+        $this->logger->info('Placing order on Dhan', $payload);
 
         try {
             // Mock response for demo if no real creds
@@ -52,25 +79,34 @@ class DhanOrderAdapter
             // For now, we rely on the API call or expect the user to provide valid creds.
 
             $response = $this->client->post('orders', ['json' => $payload]);
+
             return json_decode($response->getBody(), true);
         } catch (\Exception $e) {
-            $this->logger->error("Order Placement Error: " . $e->getMessage());
+            $this->logger->error('Order Placement Error: '.$e->getMessage());
             throw $e;
         }
     }
 
+    /**
+     * Cancel an order on Dhan.
+     *
+     * @return array API response.
+     *
+     * @throws \Exception If cancellation fails.
+     */
     public function cancelOrder(string $orderId): array
     {
         $this->logger->info("Cancelling order: $orderId");
 
         try {
-             // Mock response
-             // Mock response
+            // Mock response
+            // Mock response
 
             $response = $this->client->delete("orders/{$orderId}");
+
             return json_decode($response->getBody(), true);
         } catch (\Exception $e) {
-            $this->logger->error("Order Cancellation Error: " . $e->getMessage());
+            $this->logger->error('Order Cancellation Error: '.$e->getMessage());
             throw $e;
         }
     }

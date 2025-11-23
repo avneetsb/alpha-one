@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class Instrument extends Model
 {
     protected $table = 'instruments';
-    
+
     public $timestamps = false; // We handle updated_at manually or via migration default
 
     protected $fillable = [
@@ -24,7 +24,7 @@ class Instrument extends Model
         'cover_flag',
         'asm_gsm_flag',
         'buy_sell_indicator',
-        'updated_at'
+        'updated_at',
     ];
 
     protected $casts = [

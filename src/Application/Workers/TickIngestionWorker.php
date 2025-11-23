@@ -19,11 +19,11 @@ class TickIngestionWorker extends Command
         $this->setDescription('Start tick ingestion worker')
             ->addOption('broker', null, InputOption::VALUE_REQUIRED, 'Broker name', 'dhan')
             ->setHelp(
-                "Usage:\n" .
-                "  php bin/console cli:workers:tick-ingestion [--broker=dhan]\n\n" .
-                "Options:\n" .
-                "  --broker   Broker identifier. Default: dhan.\n\n" .
-                "Behavior:\n" .
+                "Usage:\n".
+                "  php bin/console cli:workers:tick-ingestion [--broker=dhan]\n\n".
+                "Options:\n".
+                "  --broker   Broker identifier. Default: dhan.\n\n".
+                "Behavior:\n".
                 "  Connects to broker WS, subscribes to Redis-managed instrument set, and ingests ticks.\n"
             );
     }
@@ -46,25 +46,25 @@ class TickIngestionWorker extends Command
         // Initial subscription
         $key = "subscriptions:{$broker}";
         $instruments = $redis->smembers($key);
-        if (!empty($instruments)) {
+        if (! empty($instruments)) {
             $client->subscribe($instruments);
         }
 
-        $output->writeln("Worker started. Press Ctrl+C to stop.");
+        $output->writeln('Worker started. Press Ctrl+C to stop.');
 
         // Main loop
         while (true) {
             // Check for new subscriptions periodically or via a control channel
             // For now, just read
             $data = $client->read();
-            
+
             if ($data) {
                 // Parse binary data (Mocking parsing here)
                 // $tick = $parser->parse($data);
-                
+
                 // Log that we received something
-                $logger->debug("Received data length: " . strlen($data));
-                
+                $logger->debug('Received data length: '.strlen($data));
+
                 // In real implementation:
                 // 1. Parse tick
                 // 2. Push to Redis Queue per instrument

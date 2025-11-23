@@ -3,29 +3,31 @@
 namespace TradingPlatform\Domain\Strategy;
 
 use TradingPlatform\Domain\Indicators\IndicatorManager;
-use TradingPlatform\Domain\MarketData\{Tick, Candle};
+use TradingPlatform\Domain\MarketData\Candle;
+use TradingPlatform\Domain\MarketData\Tick;
 
 /**
  * Advanced Multi-Indicator Strategy (97-Indicator Library)
- * 
+ *
  * Leverages the best indicators from each category:
  * - Trend: T3 (low-lag smoothing) or MAMA (adaptive)
  * - Momentum: StochRSI (sensitive) or ConnorsRSI (mean-reversion)
  * - Volume: OBV + Volume Oscillator (confirmation)
  * - Volatility: ATR + Ulcer Index (risk management)
  * - Advanced: Schaff Trend Cycle (combined MACD+Stochastic)
- * 
+ *
  * Designed for hyperparameter optimization with 97 indicators available
  */
 class MultiIndicatorStrategy extends AbstractStrategy
 {
     private IndicatorManager $indicators;
+
     private array $candles = [];
 
     public function __construct(array $config)
     {
         parent::__construct($config);
-        $this->indicators = new IndicatorManager();
+        $this->indicators = new IndicatorManager;
     }
 
     /**
@@ -36,57 +38,57 @@ class MultiIndicatorStrategy extends AbstractStrategy
         return [
             // === SELECTABLE INDICATORS ===
             // Trend Indicator Selection
-            ['name' => 'trend_indicator', 'type' => 'categorical', 
-             'options' => ['t3', 'mama', 'gmma', 'supertrend', 'ichimoku'], 
-             'default' => 't3'],
-            
+            ['name' => 'trend_indicator', 'type' => 'categorical',
+                'options' => ['t3', 'mama', 'gmma', 'supertrend', 'ichimoku'],
+                'default' => 't3'],
+
             // Momentum Indicator Selection
             ['name' => 'momentum_indicator', 'type' => 'categorical',
-             'options' => ['stochrsi', 'connorsrsi', 'stc', 'rsi', 'macd'],
-             'default' => 'stochrsi'],
-            
+                'options' => ['stochrsi', 'connorsrsi', 'stc', 'rsi', 'macd'],
+                'default' => 'stochrsi'],
+
             // Volume Indicator
             ['name' => 'volume_indicator', 'type' => 'categorical',
-             'options' => ['obv', 'vosc', 'mfi', 'cmf'],
-             'default' => 'obv'],
-            
+                'options' => ['obv', 'vosc', 'mfi', 'cmf'],
+                'default' => 'obv'],
+
             // === T3 Parameters ===
             ['name' => 't3_period', 'type' => 'int', 'min' => 3, 'max' => 10, 'default' => 5],
             ['name' => 't3_vfactor', 'type' => 'float', 'min' => 0.5, 'max' => 0.9, 'step' => 0.1, 'default' => 0.7],
-            
+
             // === MAMA Parameters ===
             ['name' => 'mama_fast_limit', 'type' => 'float', 'min' => 0.3, 'max' => 0.7, 'step' => 0.1, 'default' => 0.5],
             ['name' => 'mama_slow_limit', 'type' => 'float', 'min' => 0.01, 'max' => 0.1, 'step' => 0.01, 'default' => 0.05],
-            
+
             // === StochRSI Parameters ===
             ['name' => 'stochrsi_rsi_period', 'type' => 'int', 'min' => 10, 'max' => 20, 'default' => 14],
             ['name' => 'stochrsi_stoch_period', 'type' => 'int', 'min' => 10, 'max' => 20, 'default' => 14],
             ['name' => 'stochrsi_oversold', 'type' => 'float', 'min' => 0.15, 'max' => 0.25, 'step' => 0.05, 'default' => 0.20],
             ['name' => 'stochrsi_overbought', 'type' => 'float', 'min' => 0.75, 'max' => 0.85, 'step' => 0.05, 'default' => 0.80],
-            
+
             // === ConnorsRSI Parameters ===
             ['name' => 'connorsrsi_period', 'type' => 'int', 'min' => 2, 'max' => 5, 'default' => 3],
             ['name' => 'connorsrsi_oversold', 'type' => 'int', 'min' => 5, 'max' => 15, 'default' => 10],
             ['name' => 'connorsrsi_overbought', 'type' => 'int', 'min' => 85, 'max' => 95, 'default' => 90],
-            
+
             // === Schaff Trend Cycle Parameters ===
             ['name' => 'stc_cycle', 'type' => 'int', 'min' => 8, 'max' => 12, 'default' => 10],
             ['name' => 'stc_fast', 'type' => 'int', 'min' => 20, 'max' => 26, 'default' => 23],
             ['name' => 'stc_slow', 'type' => 'int', 'min' => 45, 'max' => 55, 'default' => 50],
-            
+
             // === Volume Oscillator Parameters ===
             ['name' => 'vosc_fast', 'type' => 'int', 'min' => 5, 'max' => 15, 'default' => 12],
             ['name' => 'vosc_slow', 'type' => 'int', 'min' => 20, 'max' => 30, 'default' => 26],
-            
+
             // === Risk Management ===
             ['name' => 'atr_period', 'type' => 'int', 'min' => 10, 'max' => 20, 'default' => 14],
             ['name' => 'atr_stop_multiplier', 'type' => 'float', 'min' => 1.5, 'max' => 3.0, 'step' => 0.5, 'default' => 2.0],
             ['name' => 'atr_target_multiplier', 'type' => 'float', 'min' => 2.0, 'max' => 4.0, 'step' => 0.5, 'default' => 3.0],
-            
+
             // === Signal Confirmation ===
-            ['name' => 'require_volume_confirmation', 'type' => 'categorical', 
-             'options' => ['yes', 'no'], 
-             'default' => 'yes'],
+            ['name' => 'require_volume_confirmation', 'type' => 'categorical',
+                'options' => ['yes', 'no'],
+                'default' => 'yes'],
             ['name' => 'min_confidence', 'type' => 'float', 'min' => 0.6, 'max' => 0.9, 'step' => 0.1, 'default' => 0.7],
         ];
     }
@@ -111,11 +113,11 @@ class MultiIndicatorStrategy extends AbstractStrategy
     {
         // Store candles
         $this->candles[] = [
-            'open' => (float)$candle->open,
-            'high' => (float)$candle->high,
-            'low' => (float)$candle->low,
-            'close' => (float)$candle->close,
-            'volume' => (int)$candle->volume,
+            'open' => (float) $candle->open,
+            'high' => (float) $candle->high,
+            'low' => (float) $candle->low,
+            'close' => (float) $candle->close,
+            'volume' => (int) $candle->volume,
         ];
 
         if (count($this->candles) > $this->maxCandles) {
@@ -134,10 +136,10 @@ class MultiIndicatorStrategy extends AbstractStrategy
 
         // === Calculate Trend ===
         $trendSignal = $this->calculateTrendSignal($trendIndicator);
-        
+
         // === Calculate Momentum ===
         $momentumSignal = $this->calculateMomentumSignal($momentumIndicator);
-        
+
         // === Calculate Volume ===
         $volumeConfirmed = $this->calculateVolumeConfirmation($volumeIndicator);
 
@@ -145,7 +147,7 @@ class MultiIndicatorStrategy extends AbstractStrategy
         $atr = $this->indicators->calculate('atr', $this->candles, [
             'period' => $this->hp['atr_period'],
         ]);
-        
+
         $ulcer = $this->indicators->calculate('ulcer', $this->candles, [
             'period' => $this->hp['atr_period'],
         ]);
@@ -157,16 +159,16 @@ class MultiIndicatorStrategy extends AbstractStrategy
 
         // Require volume confirmation if enabled
         $requireVolumeConf = $this->hp['require_volume_confirmation'] === 'yes';
-        
+
         // === BUY SIGNAL ===
         if ($trendSignal === 'buy' && $momentumSignal === 'buy') {
-            if ($requireVolumeConf && !$volumeConfirmed) {
+            if ($requireVolumeConf && ! $volumeConfirmed) {
                 return null;
             }
 
             // Calculate confidence based on signal strength
             $confidence = $this->calculateConfidence($trendSignal, $momentumSignal, $volumeConfirmed);
-            
+
             if ($confidence < $this->hp['min_confidence']) {
                 return null;
             }
@@ -182,12 +184,12 @@ class MultiIndicatorStrategy extends AbstractStrategy
 
         // === SELL SIGNAL ===
         if ($trendSignal === 'sell' && $momentumSignal === 'sell') {
-            if ($requireVolumeConf && !$volumeConfirmed) {
+            if ($requireVolumeConf && ! $volumeConfirmed) {
                 return null;
             }
 
             $confidence = $this->calculateConfidence($trendSignal, $momentumSignal, $volumeConfirmed);
-            
+
             if ($confidence < $this->hp['min_confidence']) {
                 return null;
             }
@@ -238,6 +240,7 @@ class MultiIndicatorStrategy extends AbstractStrategy
                     'multiplier' => 3.0,
                 ]);
                 $direction = $st['direction'][$currentIndex] ?? 0;
+
                 return $direction === 1 ? 'buy' : ($direction === -1 ? 'sell' : null);
 
             default:
@@ -257,11 +260,15 @@ class MultiIndicatorStrategy extends AbstractStrategy
                     'rsi_period' => $this->hp['stochrsi_rsi_period'],
                     'stoch_period' => $this->hp['stochrsi_stoch_period'],
                 ]);
-                
-                if (!empty($stochRSI['k'])) {
+
+                if (! empty($stochRSI['k'])) {
                     $kValue = end($stochRSI['k']) / 100; // Normalize to 0-1
-                    if ($kValue < $this->hp['stochrsi_oversold']) return 'buy';
-                    if ($kValue > $this->hp['stochrsi_overbought']) return 'sell';
+                    if ($kValue < $this->hp['stochrsi_oversold']) {
+                        return 'buy';
+                    }
+                    if ($kValue > $this->hp['stochrsi_overbought']) {
+                        return 'sell';
+                    }
                 }
                 break;
 
@@ -271,8 +278,12 @@ class MultiIndicatorStrategy extends AbstractStrategy
                 ]);
                 $crsiValue = $crsi[$currentIndex] ?? null;
                 if ($crsiValue !== null) {
-                    if ($crsiValue < $this->hp['connorsrsi_oversold']) return 'buy';
-                    if ($crsiValue > $this->hp['connorsrsi_overbought']) return 'sell';
+                    if ($crsiValue < $this->hp['connorsrsi_oversold']) {
+                        return 'buy';
+                    }
+                    if ($crsiValue > $this->hp['connorsrsi_overbought']) {
+                        return 'sell';
+                    }
                 }
                 break;
 
@@ -282,11 +293,15 @@ class MultiIndicatorStrategy extends AbstractStrategy
                     'fast' => $this->hp['stc_fast'],
                     'slow' => $this->hp['stc_slow'],
                 ]);
-                
-                if (!empty($stc)) {
+
+                if (! empty($stc)) {
                     $stcValue = end($stc);
-                    if ($stcValue < 25) return 'buy';
-                    if ($stcValue > 75) return 'sell';
+                    if ($stcValue < 25) {
+                        return 'buy';
+                    }
+                    if ($stcValue > 75) {
+                        return 'sell';
+                    }
                 }
                 break;
 
@@ -307,6 +322,7 @@ class MultiIndicatorStrategy extends AbstractStrategy
                 if (count($obv) >= 2) {
                     $current = $obv[$currentIndex] ?? 0;
                     $previous = $obv[$currentIndex - 1] ?? 0;
+
                     return $current > $previous; // Volume increasing
                 }
                 break;
@@ -317,11 +333,13 @@ class MultiIndicatorStrategy extends AbstractStrategy
                     'slow_period' => $this->hp['vosc_slow'],
                 ]);
                 $voscValue = $vosc[$currentIndex] ?? null;
+
                 return $voscValue !== null && $voscValue > 0;
 
             case 'mfi':
                 $mfi = $this->indicators->calculate('mfi', $this->candles, ['period' => 14]);
                 $mfiValue = $mfi[$currentIndex] ?? 50;
+
                 return $mfiValue > 40 && $mfiValue < 60; // Neutral zone
 
             default:

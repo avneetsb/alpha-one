@@ -3,22 +3,27 @@
 namespace TradingPlatform\Console\Commands;
 
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
-use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Output\OutputInterface;
-use Symfony\Component\Console\Helper\Table;
 use TradingPlatform\Domain\Optimization\Models\OptimizationRun;
-use TradingPlatform\Domain\Strategy\Models\StrategyConfiguration;
-use TradingPlatform\Domain\Backtesting\BacktestResult;
 
 /**
- * List optimization runs and results
+ * Class ListOptimizationRunsCommand
+ *
+ * Console command to list optimization runs and their results.
  */
 class ListOptimizationRunsCommand extends Command
 {
+    /**
+     * @var string|null The default name of the command.
+     */
     protected static $defaultName = 'optimization:list';
 
+    /**
+     * Configure the command options and arguments.
+     */
     protected function configure(): void
     {
         $this
@@ -28,10 +33,15 @@ class ListOptimizationRunsCommand extends Command
             ->addOption('limit', 'l', InputOption::VALUE_OPTIONAL, 'Limit number of results', 10);
     }
 
+    /**
+     * Execute the command.
+     *
+     * @return int Command exit code.
+     */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $status = $input->getOption('status');
-        $limit = (int)$input->getOption('limit');
+        $limit = (int) $input->getOption('limit');
 
         $query = OptimizationRun::with('strategy');
 
@@ -45,6 +55,7 @@ class ListOptimizationRunsCommand extends Command
 
         if ($runs->isEmpty()) {
             $output->writeln('<comment>No optimization runs found.</comment>');
+
             return Command::SUCCESS;
         }
 
@@ -61,7 +72,7 @@ class ListOptimizationRunsCommand extends Command
                 $run->name,
                 $this->colorizeStatus($run->status),
                 $run->best_fitness ? number_format($run->best_fitness, 4) : 'N/A',
-                number_format($run->getProgressPercentage(), 1) . '%',
+                number_format($run->getProgressPercentage(), 1).'%',
                 $run->started_at ? $run->started_at->format('Y-m-d H:i') : 'Not started',
                 $durationStr,
             ]);
@@ -72,9 +83,12 @@ class ListOptimizationRunsCommand extends Command
         return Command::SUCCESS;
     }
 
+    /**
+     * Colorize the status string for display.
+     */
     private function colorizeStatus(string $status): string
     {
-        return match($status) {
+        return match ($status) {
             'completed' => "<info>{$status}</info>",
             'running' => "<comment>{$status}</comment>",
             'failed' => "<error>{$status}</error>",

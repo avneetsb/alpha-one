@@ -4,126 +4,52 @@ use Monolog\Handler\StreamHandler;
 use Monolog\Level;
 
 /**
- * Logging configuration for the trading platform application.
- * 
- * This configuration file defines all logging channels and handlers used by the
- * trading platform. It supports multiple log channels, different log levels,
- * and various output destinations including files, console, and external services.
- * 
- * @package Config
- * @author  Trading Platform Team
- * @version 1.0.0
- * 
- * @structure
- * - default: Default logging channel
- * - channels: Array of available log channels with their configurations
- * 
- * @environment_variables
- * - LOG_CHANNEL: Default logging channel (stack, single, console, etc.)
+ * Logging Configuration
  *
- * @accepted_values
- * - LOG_CHANNEL: 'stack', 'single', 'console' (extendable: 'daily', 'slack', 'syslog')
- * 
- * @dependencies
- * - Monolog\Handler\StreamHandler: For file and console output
- * - Monolog\Level: For log level constants
- * 
- * @example
- * // Environment configuration:
- * LOG_CHANNEL=stack
- * 
- * // Usage in application:
- * use Illuminate\Support\Facades\Log;
- * 
- * Log::info('Order placed successfully', [
- *     'order_id' => 12345,
- *     'instrument' => 'RELIANCE',
- *     'quantity' => 100,
- *     'price' => 2500.50
- * ]);
- * 
- * Log::error('Order execution failed', [
- *     'order_id' => 12346,
- *     'error' => 'Insufficient margin',
- *     'available_margin' => 50000,
- *     'required_margin' => 75000
- * ]);
- * 
- * // Channel-specific logging:
- * Log::channel('console')->debug('Strategy calculation completed');
- * 
- * @log_levels
- * - DEBUG: Detailed debug information (Level::Debug)
- * - INFO: Interesting events (Level::Info)
- * - NOTICE: Normal but significant events (Level::Notice)
- * - WARNING: Exceptional occurrences that are not errors (Level::Warning)
- * - ERROR: Runtime errors not requiring immediate action (Level::Error)
- * - CRITICAL: Critical conditions (Level::Critical)
- * - ALERT: Action must be taken immediately (Level::Alert)
- * - EMERGENCY: System is unusable (Level::Emergency)
- * 
- * @important For trading applications, consider these logging practices:
- * - Log all order placements, modifications, and cancellations
- * - Log strategy signals and decisions with context
- * - Log market data updates for audit trails
- * - Log risk management events (margin calls, stop losses)
- * - Log system health and performance metrics
- * - Ensure logs don't contain sensitive data (passwords, tokens)
- * - Implement log rotation to manage disk space
- * - Consider centralized logging for distributed systems
- * 
- * @note The 'stack' channel allows multiple handlers to process the same log
- *       record, useful for both file and console output simultaneously.
+ * This configuration file defines the logging infrastructure for the trading platform.
+ * Effective logging is crucial for:
+ * 1. Audit Trails: Recording every trade decision and execution for compliance.
+ * 2. Debugging: Tracing complex strategy logic and order routing paths.
+ * 3. Monitoring: Detecting system anomalies, latency spikes, and error rates.
+ *
+ * The platform uses Monolog, allowing for sophisticated log routing. Logs can be
+ * sent to files, the console, or external monitoring services (e.g., ELK stack, Datadog)
+ * depending on the environment.
+ *
+ * @author  Trading Platform Team
+ *
+ * @version 1.0.0
  */
 
 return [
     /**
-     * Default logging channel.
-     * 
-     * Specifies which logging channel should be used by default when
-     * no specific channel is requested. This value is typically set
-     * via the LOG_CHANNEL environment variable.
-     * 
+     * Default Log Channel
+     *
+     * The default channel used when `Log::info()` or similar methods are called
+     * without specifying a channel.
+     *
      * @var string
-     * @default 'stack'
-     * @options 'stack', 'single', 'console', 'daily', 'slack', 'syslog'
-     * 
-     * @example Environment configuration:
-     * // Development: Detailed logging to console
-     * LOG_CHANNEL=console
-     * 
-     * // Production: File-based logging with rotation
-     * LOG_CHANNEL=daily
-     * 
-     * // Debug: Maximum verbosity
-     * LOG_CHANNEL=stack
+     *
+     * @see config/logging.php['channels']
      */
     'default' => env('LOG_CHANNEL', 'stack'),
 
     /**
-     * Logging channel configurations.
-     * 
-     * Defines all available logging channels with their specific
-     * handlers, formatters, and output destinations.
+     * Log Channels
+     *
+     * Defines the available logging channels.
      */
     'channels' => [
         /**
-         * Stack logging channel.
-         * 
-         * Allows multiple handlers to process the same log record simultaneously.
-         * Useful for sending logs to both file and console at the same time.
-         * 
-         * @structure
-         * - driver: 'stack' for multi-handler processing
-         * - channels: Array of channel names to stack
-         * - ignore_exceptions: Whether to ignore handler exceptions
-         * 
-         * @usage
-         * // Logs to both 'single' and 'console' channels:
-         * Log::channel('stack')->info('Order executed', ['id' => 12345]);
-         * 
-         * @note The stack channel is ideal for development environments where
-         *       you want to see logs both in files and on screen.
+         * Stack Channel
+         *
+         * A meta-channel that broadcasts log records to multiple other channels.
+         * This is the default in most environments to ensure logs are both
+         * persisted (e.g., to a file) and visible (e.g., in the console).
+         *
+         * @driver stack
+         *
+         * @channels ['single'] (Can be extended to include 'daily', 'slack', etc.)
          */
         'stack' => [
             'driver' => 'stack',
@@ -132,63 +58,40 @@ return [
         ],
 
         /**
-         * Single file logging channel.
-         * 
-         * Logs all messages to a single file using Monolog's StreamHandler.
-         * Suitable for applications with moderate log volume.
-         * 
-         * @structure
-         * - driver: 'monolog' for Monolog integration
-         * - handler: StreamHandler::class for file output
-         * - with.stream: Log file path
-         * - with.level: Minimum log level (Level::Debug)
-         * 
-         * @example File output:
-         * // Logs are written to: storage/logs/app.log
-         * [2024-01-15 14:30:45] trading-platform.INFO: Order placed successfully {"order_id": 12345}
-         * [2024-01-15 14:30:46] trading-platform.ERROR: Order execution failed {"order_id": 12346, "error": "Insufficient funds"}
-         * 
-         * @important Consider log rotation for production use to prevent
-         *          large log files from consuming disk space.
-         * 
-         * @note The Level::Debug includes all log levels from DEBUG to EMERGENCY.
+         * Single File Channel
+         *
+         * Writes all logs to a single file (`storage/logs/app.log`).
+         * Useful for local development and simple deployments.
+         *
+         * @driver monolog
+         *
+         * @handler StreamHandler
+         *
+         * @level debug (Captures everything from debug info to emergencies)
          */
         'single' => [
             'driver' => 'monolog',
             'handler' => StreamHandler::class,
             'with' => [
-                'stream' => __DIR__ . '/../storage/logs/app.log',
+                'stream' => __DIR__.'/../storage/logs/app.log',
                 'level' => Level::Debug,
             ],
         ],
 
         /**
-         * Console logging channel.
-         * 
-         * Outputs log messages directly to the console/terminal.
-         * Ideal for development environments and command-line tools.
-         * 
-         * @structure
-         * - driver: 'monolog' for Monolog integration
-         * - handler: StreamHandler::class for console output
-         * - with.stream: 'php://stdout' for standard output
-         * - with.level: Minimum log level (Level::Debug)
-         * 
-         * @usage
-         * // Console output example:
-         * php artisan strategy:test --verbose
-         * // Output: [2024-01-15 14:30:45] Strategy backtest started
-         * //         [2024-01-15 14:30:46] Processing 1000 historical candles
-         * //         [2024-01-15 14:30:47] Backtest completed: 15.2% returns
-         * 
-         * @note Console logging is particularly useful for:
-         *       - Long-running processes (backtests, optimizations)
-         *       - Command-line tools and artisan commands
-         *       - Development debugging
-         *       - Real-time monitoring of trading operations
-         * 
-         * @important Console logs are not persisted and will be lost when the
-         *          terminal session ends. Use file-based logging for audit trails.
+         * Console Channel
+         *
+         * Writes logs directly to `php://stdout`.
+         * Essential for containerized environments (Docker/Kubernetes) where
+         * logs are collected from stdout by the container runtime.
+         *
+         * @driver monolog
+         *
+         * @handler StreamHandler
+         *
+         * @stream php://stdout
+         *
+         * @level debug
          */
         'console' => [
             'driver' => 'monolog',

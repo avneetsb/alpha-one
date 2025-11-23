@@ -5,8 +5,17 @@ namespace TradingPlatform\Infrastructure\Logger;
 use Monolog\LogRecord;
 use Monolog\Processor\ProcessorInterface;
 
+/**
+ * Class: Log Sanitizer Processor
+ *
+ * Monolog processor that automatically redacts sensitive information
+ * (passwords, tokens, keys) from log context and extras before writing.
+ */
 class LogSanitizerProcessor implements ProcessorInterface
 {
+    /**
+     * @var array List of keys to redact.
+     */
     private array $sensitiveKeys = [
         'access_token',
         'refresh_token',
@@ -18,15 +27,27 @@ class LogSanitizerProcessor implements ProcessorInterface
         'authorization',
     ];
 
+    /**
+     * Process the log record.
+     *
+     * Recursively sanitizes context and extra arrays, and attempts to scrub
+     * sensitive patterns from the log message itself.
+     *
+     * @param  LogRecord  $record  The log record to process.
+     * @return LogRecord The sanitized log record.
+     */
     public function __invoke(LogRecord $record): LogRecord
     {
         $record->context = $this->sanitize($record->context);
         $record->extra = $this->sanitize($record->extra);
         $record->message = $this->sanitizeString($record->message);
-        
+
         return $record;
     }
 
+    /**
+     * Recursively sanitize an array.
+     */
     private function sanitize(array $data): array
     {
         foreach ($data as $key => $value) {
@@ -35,13 +56,17 @@ class LogSanitizerProcessor implements ProcessorInterface
             } elseif (is_string($key) && $this->isSensitive($key)) {
                 $data[$key] = '***REDACTED***';
             } elseif (is_string($value)) {
-                // Check if value looks like a token or key if needed, 
+                // Check if value looks like a token or key if needed,
                 // but relying on key names is safer for performance.
             }
         }
+
         return $data;
     }
 
+    /**
+     * Sanitize a string message.
+     */
     private function sanitizeString(string $message): string
     {
         // Simple regex to catch common patterns in strings if they leak
@@ -50,6 +75,9 @@ class LogSanitizerProcessor implements ProcessorInterface
         return $message;
     }
 
+    /**
+     * Check if a key is sensitive.
+     */
     private function isSensitive(string $key): bool
     {
         $lowerKey = strtolower($key);
@@ -58,6 +86,7 @@ class LogSanitizerProcessor implements ProcessorInterface
                 return true;
             }
         }
+
         return false;
     }
 }

@@ -2,12 +2,13 @@
 
 namespace TradingPlatform\Infrastructure\Queue;
 
-use TradingPlatform\Infrastructure\Cache\RedisAdapter;
 use Illuminate\Support\Facades\Log;
+use TradingPlatform\Infrastructure\Cache\RedisAdapter;
 
 class PoisonMessageHandler
 {
     private RedisAdapter $redis;
+
     private int $maxRetries;
 
     public function __construct(int $maxRetries = 3)
@@ -22,7 +23,7 @@ class PoisonMessageHandler
         $retries = $this->redis->getClient()->incr($retryKey);
 
         if ($retries > $this->maxRetries) {
-            $this->moveToDlq($jobId, $payload, $queue, "Max retries exceeded");
+            $this->moveToDlq($jobId, $payload, $queue, 'Max retries exceeded');
             $this->redis->getClient()->del([$retryKey]);
         }
     }
@@ -38,7 +39,7 @@ class PoisonMessageHandler
         ]);
 
         $this->redis->getClient()->rpush($dlqKey, [$dlqPayload]);
-        
+
         // Log the event
         // In a real app, we'd use the LoggerService
         // echo "Moved job $jobId to DLQ: $dlqKey\n";

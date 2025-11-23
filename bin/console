@@ -90,6 +90,8 @@ $application->add(new \TradingPlatform\Application\Commands\System\HealthCheckCo
 $application->add(new \TradingPlatform\Application\Workers\LoggingWorkerCommand());
 $application->add(new \TradingPlatform\Application\Commands\Monitoring\DashboardCommand());
 $application->add(new \TradingPlatform\Application\Commands\Optimization\OptimizeStrategyCommand());
+$application->add(new \TradingPlatform\Application\Commands\System\FormatCodeCommand());
+$application->add(new \TradingPlatform\Application\Commands\System\TestCommand());
 
 /**
  * Run the console application.

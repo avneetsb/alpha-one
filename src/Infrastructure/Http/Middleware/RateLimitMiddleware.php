@@ -5,8 +5,23 @@ namespace TradingPlatform\Infrastructure\Http\Middleware;
 use Closure;
 use Illuminate\Support\Facades\Redis;
 
+/**
+ * Middleware: Rate Limiter
+ *
+ * Limits the number of requests a client can make within a specified time window.
+ * Uses Redis to track request counts per IP address.
+ */
 class RateLimitMiddleware
 {
+    /**
+     * Handle the incoming request.
+     *
+     * @param  mixed  $request  The HTTP request.
+     * @param  \Closure  $next  The next middleware/handler.
+     * @param  int  $limit  Max requests allowed (default: 60).
+     * @param  int  $window  Time window in seconds (default: 60).
+     * @return mixed The response.
+     */
     public function handle($request, Closure $next, $limit = 60, $window = 60)
     {
         $ip = $request->ip();
@@ -24,7 +39,7 @@ class RateLimitMiddleware
                 'error' => [
                     'code' => 'RATE_LIMIT_EXCEEDED',
                     'message' => 'Too many requests',
-                ]
+                ],
             ], 429);
         }
 

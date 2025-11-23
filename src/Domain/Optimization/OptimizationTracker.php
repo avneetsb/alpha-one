@@ -2,13 +2,11 @@
 
 namespace TradingPlatform\Domain\Optimization;
 
-use TradingPlatform\Domain\Strategy\Models\{
-    Strategy,
-    StrategyConfiguration,
-    OptimizationRun,
-    OptimizationResult as OptimizationResultModel,
-    BacktestResult
-};
+use TradingPlatform\Domain\Strategy\Models\BacktestResult;
+use TradingPlatform\Domain\Strategy\Models\OptimizationResult as OptimizationResultModel;
+use TradingPlatform\Domain\Strategy\Models\OptimizationRun;
+use TradingPlatform\Domain\Strategy\Models\Strategy;
+use TradingPlatform\Domain\Strategy\Models\StrategyConfiguration;
 
 /**
  * Optimization Tracking Service - Persists optimization runs and results
@@ -16,6 +14,7 @@ use TradingPlatform\Domain\Strategy\Models\{
 class OptimizationTracker
 {
     private ?OptimizationRun $currentRun = null;
+
     private ?Strategy $strategy = null;
 
     /**
@@ -32,7 +31,7 @@ class OptimizationTracker
         string $periodEnd
     ): OptimizationRun {
         $this->strategy = $strategy;
-        
+
         $this->currentRun = OptimizationRun::create([
             'strategy_id' => $strategy->id,
             'name' => $name,
@@ -62,20 +61,20 @@ class OptimizationTracker
         array $backtestResults,
         callable $decodeDNA
     ): void {
-        if (!$this->currentRun) {
+        if (! $this->currentRun) {
             throw new \Exception('No active optimization run');
         }
 
         // Rank individuals
         $rankedIndices = array_keys($fitnesses);
-        usort($rankedIndices, fn($a, $b) => $fitnesses[$b] <=> $fitnesses[$a]);
+        usort($rankedIndices, fn ($a, $b) => $fitnesses[$b] <=> $fitnesses[$a]);
 
-        $eliteCount = max(1, (int)(count($population) * 0.1));
+        $eliteCount = max(1, (int) (count($population) * 0.1));
 
         foreach ($population as $index => $dna) {
             // Create or find configuration
             $hyperparameters = $decodeDNA($dna);
-            
+
             $config = StrategyConfiguration::create([
                 'strategy_id' => $this->strategy->id,
                 'name' => "Gen{$generation}_Ind{$index}",
@@ -90,7 +89,7 @@ class OptimizationTracker
             if (isset($backtestResults[$index])) {
                 $backtest = BacktestResult::create([
                     'strategy_config_id' => $config->id,
-                    ...$backtestResults[$index]
+                    ...$backtestResults[$index],
                 ]);
                 $backtestResultId = $backtest->id;
             }
@@ -125,7 +124,7 @@ class OptimizationTracker
      */
     public function completeRun(string $bestDNA, float $bestFitness): void
     {
-        if (!$this->currentRun) {
+        if (! $this->currentRun) {
             throw new \Exception('No active optimization run');
         }
 

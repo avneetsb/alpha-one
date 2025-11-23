@@ -2,20 +2,19 @@
 
 namespace TradingPlatform\Domain\Indicators;
 
-use TradingPlatform\Domain\MarketData\Models\Candle;
-
 abstract class AbstractIndicator implements IndicatorInterface
 {
     protected string $id;
+
     protected array $config;
 
     public function __construct(array $config = [])
     {
-        if (!$this->validateConfig($config)) {
-            throw new \InvalidArgumentException("Invalid configuration for indicator " . static::class);
+        if (! $this->validateConfig($config)) {
+            throw new \InvalidArgumentException('Invalid configuration for indicator '.static::class);
         }
         $this->config = $config;
-        $this->id = uniqid(static::class . '_');
+        $this->id = uniqid(static::class.'_');
     }
 
     public function getId(): string

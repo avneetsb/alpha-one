@@ -5,6 +5,68 @@ namespace TradingPlatform\Domain\Strategy\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * Class BacktestResult
+ *
+ * Stores comprehensive backtest performance metrics for strategy configurations.
+ * Tracks profitability, risk-adjusted returns, trade statistics, and equity curves
+ * to enable data-driven strategy selection and optimization.
+ *
+ * **Performance Metrics:**
+ * - Returns: Total return, total profit, final capital
+ * - Risk: Sharpe ratio, Sortino ratio, max drawdown
+ * - Trade Stats: Win rate, profit factor, avg win/loss
+ * - Costs: Commission paid, slippage cost
+ * - Curves: Equity curve, monthly returns
+ *
+ * **Use Cases:**
+ * - Strategy validation before live deployment
+ * - Hyperparameter optimization (finding best parameters)
+ * - Walk-forward analysis (out-of-sample testing)
+ * - Strategy comparison and ranking
+ * - Performance reporting and visualization
+ *
+ * **Key Metrics Explained:**
+ * - **Sharpe Ratio**: Risk-adjusted return (>1.0 good, >2.0 excellent)
+ * - **Sortino Ratio**: Like Sharpe but only penalizes downside volatility
+ * - **Max Drawdown**: Largest peak-to-trough decline (%)
+ * - **Profit Factor**: Gross profit / Gross loss (>1.5 good)
+ * - **Win Rate**: % of winning trades (>50% for trend, >40% for mean-reversion)
+ *
+ * @author  Trading Platform Team
+ *
+ * @version 1.0.0
+ *
+ * @example Storing backtest results
+ * ```php
+ * $result = BacktestResult::create([
+ *     'strategy_config_id' => 1,
+ *     'symbol' => 'RELIANCE',
+ *     'timeframe' => '15m',
+ *     'period_start' => '2023-01-01',
+ *     'period_end' => '2023-12-31',
+ *     'initial_capital' => 100000,
+ *     'final_capital' => 125000,
+ *     'total_return' => 25.0,  // 25%
+ *     'total_trades' => 150,
+ *     'winning_trades' => 85,
+ *     'losing_trades' => 65,
+ *     'win_rate' => 56.67,
+ *     'profit_factor' => 1.85,
+ *     'sharpe_ratio' => 1.75,
+ *     'max_drawdown' => -8.5,
+ *     'equity_curve' => [...],  // Array of equity values
+ * ]);
+ * ```
+ * @example Finding best strategies
+ * ```php
+ * $topStrategies = BacktestResult::profitable()
+ *     ->where('sharpe_ratio', '>', 1.5)
+ *     ->where('max_drawdown', '>', -15)
+ *     ->bestSharpe(10)
+ *     ->get();
+ * ```
+ */
 class BacktestResult extends Model
 {
     protected $fillable = [
@@ -132,6 +194,7 @@ class BacktestResult extends Model
         if ($this->max_drawdown == 0) {
             return null;
         }
+
         return $this->total_return / abs($this->max_drawdown);
     }
 

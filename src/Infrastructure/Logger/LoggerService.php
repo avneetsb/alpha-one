@@ -2,18 +2,16 @@
 
 namespace TradingPlatform\Infrastructure\Logger;
 
-use Monolog\Logger;
 use Monolog\Handler\StreamHandler;
-use Monolog\Level;
+use Monolog\Logger;
 
 /**
- * Logger Service
+ * Class LoggerService
  *
- * Centralized logger factory that builds a Monolog instance based on
- * application configuration. Adds processors for correlation IDs and
- * log sanitization to enhance observability and security.
+ * Centralized factory for creating and configuring the application logger.
+ * Sets up Monolog with necessary handlers (Stream, Async) and processors
+ * (Correlation ID, Sanitizer) to ensure consistent, secure, and traceable logging.
  *
- * @package TradingPlatform\Infrastructure\Logger
  * @version 1.0.0
  *
  * @example Usage:
@@ -22,23 +20,37 @@ use Monolog\Level;
  */
 class LoggerService
 {
+    /**
+     * @var Logger|null Singleton logger instance.
+     */
     private static ?Logger $logger = null;
 
     /**
-     * Get or create the shared logger instance.
+     * Retrieve the singleton logger instance.
+     *
+     * Initializes the logger on first access, loading configuration and
+     * attaching configured handlers and processors.
+     *
+     * @return Logger The configured Monolog instance.
+     *
+     * @example
+     * ```php
+     * $logger = LoggerService::getLogger();
+     * $logger->info('System started');
+     * ```
      */
     public static function getLogger(): Logger
     {
         if (self::$logger === null) {
-            $config = require __DIR__ . '/../../../config/logging.php';
+            $config = require __DIR__.'/../../../config/logging.php';
             $channelConfig = $config['channels'][$config['default']];
-            
+
             // Simple implementation for now, handling 'single' and 'console' drivers
             // In a real app, we might want a more robust factory
-            
+
             self::$logger = new Logger('app');
-            self::$logger->pushProcessor(new CorrelationIdProcessor());
-            self::$logger->pushProcessor(new LogSanitizerProcessor());
+            self::$logger->pushProcessor(new CorrelationIdProcessor);
+            self::$logger->pushProcessor(new LogSanitizerProcessor);
 
             if ($channelConfig['driver'] === 'stack') {
                 foreach ($channelConfig['channels'] as $channelName) {
@@ -54,6 +66,8 @@ class LoggerService
 
     /**
      * Add a handler to the logger based on channel configuration.
+     *
+     * @param  array  $config  Channel configuration.
      */
     private static function addHandler(array $config): void
     {

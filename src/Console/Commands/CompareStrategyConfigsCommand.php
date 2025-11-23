@@ -3,22 +3,35 @@
 namespace TradingPlatform\Console\Commands;
 
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
-use Symfony\Component\Console\Helper\Table;
-use TradingPlatform\Domain\Strategy\Models\{
-    StrategyConfiguration,
-    BacktestResult
-};
+use TradingPlatform\Domain\Strategy\Models\StrategyConfiguration;
 
 /**
- * Compare different strategy configurations
+ * Class CompareStrategyConfigsCommand
+ *
+ * Compares performance metrics of different strategy configurations.
+ * Allows filtering by strategy, favorites, and sorting by key metrics
+ * like Sharpe ratio, total return, or max drawdown.
  */
 class CompareStrategyConfigsCommand extends Command
 {
+    /**
+     * @var string The default name of the command.
+     */
     protected static $defaultName = 'strategy:compare';
 
+    /**
+     * Configure the command options and description.
+     *
+     * Defines options for:
+     * - Strategy ID filtering
+     * - Favorites only filtering
+     * - Result limit
+     * - Sorting criteria
+     */
     protected function configure(): void
     {
         $this
@@ -30,11 +43,21 @@ class CompareStrategyConfigsCommand extends Command
             ->addOption('sort', null, InputOption::VALUE_OPTIONAL, 'Sort by metric (sharpe, return, drawdown)', 'sharpe');
     }
 
+    /**
+     * Execute the console command.
+     *
+     * Fetches strategy configurations, retrieves their best backtest results,
+     * sorts them based on the specified metric, and displays a comparison table.
+     *
+     * @param  InputInterface  $input  The input interface.
+     * @param  OutputInterface  $output  The output interface.
+     * @return int Command exit code.
+     */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $strategyId = $input->getOption('strategy');
         $favorites = $input->getOption('favorites');
-        $limit = (int)$input->getOption('limit');
+        $limit = (int) $input->getOption('limit');
         $sortBy = $input->getOption('sort');
 
         $query = StrategyConfiguration::with(['backtestResults', 'strategy']);
@@ -51,6 +74,7 @@ class CompareStrategyConfigsCommand extends Command
 
         if ($configs->isEmpty()) {
             $output->writeln('<comment>No configurations found.</comment>');
+
             return Command::SUCCESS;
         }
 
@@ -67,13 +91,13 @@ class CompareStrategyConfigsCommand extends Command
         }
 
         // Sort by selected metric
-        usort($results, function($a, $b) use ($sortBy) {
+        usort($results, function ($a, $b) use ($sortBy) {
             $metricMap = [
                 'sharpe' => 'sharpe_ratio',
                 'return' => 'total_return',
                 'drawdown' => 'max_drawdown',
             ];
-            
+
             $metric = $metricMap[$sortBy] ?? 'sharpe_ratio';
             $reverse = $sortBy === 'drawdown'; // Lower drawdown is better
 
@@ -95,7 +119,7 @@ class CompareStrategyConfigsCommand extends Command
             'Drawdown %',
             'Profit Factor',
             'Win Rate %',
-            'Trades'
+            'Trades',
         ]);
 
         foreach ($results as $item) {

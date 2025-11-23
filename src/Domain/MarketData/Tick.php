@@ -10,12 +10,12 @@ use Illuminate\Database\Eloquent\Model;
  * Represents a single tick event (last traded price/time and quantities).
  * Useful for high-frequency processing and real-time strategy evaluation.
  *
- * @package TradingPlatform\Domain\MarketData
  * @version 1.0.0
  */
 class Tick extends Model
 {
     protected $table = 'ticks';
+
     public $timestamps = false;
 
     protected $fillable = [
@@ -25,7 +25,7 @@ class Tick extends Model
         'ltt',
         'buy_qty',
         'sell_qty',
-        'volume'
+        'volume',
     ];
 
     protected $casts = [

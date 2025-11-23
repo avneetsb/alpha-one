@@ -5,13 +5,10 @@ namespace TradingPlatform\Infrastructure\Http\Controllers;
 use TradingPlatform\Infrastructure\Http\ApiResponse;
 
 /**
- * Market Data Controller
+ * Class: Market Data Controller
  *
- * Manages WebSocket feed subscriptions for instruments and provides
- * connection status endpoints.
- *
- * @package TradingPlatform\Infrastructure\Http\Controllers
- * @version 1.0.0
+ * Manages real-time market data subscriptions via HTTP endpoints.
+ * Allows clients to subscribe/unsubscribe to instruments and check connection status.
  */
 class MarketDataController
 {
@@ -19,15 +16,28 @@ class MarketDataController
 
     /**
      * Subscribe to market data for provided instruments.
+     *
+     * @param  mixed  $request  HTTP Request object containing 'instruments' array.
+     * @return \Illuminate\Http\JsonResponse JSON response confirming subscription.
+     *
+     * @example Request
+     * POST /api/v1/market-data/subscribe
+     * { "instruments": ["RELIANCE", "INFY"] }
      */
     public function subscribe($request)
     {
-
         return $this->success(['subscribed' => $request->input('instruments')]);
     }
 
     /**
      * Unsubscribe from market data for provided instruments.
+     *
+     * @param  mixed  $request  HTTP Request object containing 'instruments' array.
+     * @return \Illuminate\Http\JsonResponse JSON response confirming unsubscription.
+     *
+     * @example Request
+     * POST /api/v1/market-data/unsubscribe
+     * { "instruments": ["RELIANCE"] }
      */
     public function unsubscribe($request)
     {
@@ -36,6 +46,8 @@ class MarketDataController
 
     /**
      * Get WebSocket connection status and current subscriptions.
+     *
+     * @return \Symfony\Component\HttpFoundation\JsonResponse
      */
     public function status()
     {

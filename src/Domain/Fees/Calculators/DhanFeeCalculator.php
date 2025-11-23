@@ -5,20 +5,82 @@ namespace TradingPlatform\Domain\Fees\Calculators;
 use TradingPlatform\Domain\Fees\FeeCalculatorInterface;
 
 /**
- * Dhan Broker Fee Calculator
- * 
- * Implements fee calculations for Dhan broker based on Zerodha's fee structure
- * Reference: https://zerodha.com/charges/
+ * Class DhanFeeCalculator
+ *
+ * Implements Dhan broker fee calculations based on Zerodha's fee structure.
+ * Supports equity, currency, and commodity trading with accurate tax calculations.
+ *
+ * **Fee Structure:**
+ * - Brokerage: ₹20 flat or 0.03% (whichever is lower)
+ * - STT: 0.025% (intraday sell), 0.1% (delivery both sides)
+ * - Exchange charges: 0.00345% (NSE), varies by exchange
+ * - GST: 18% on brokerage + exchange charges
+ * - SEBI charges: ₹10 per crore turnover
+ * - Stamp duty: 0.015% (buy side only, varies by state)
+ *
+ * **Supported Asset Classes:**
+ * - Equity (intraday, delivery)
+ * - Currency derivatives
+ * - Commodity derivatives (agri, non-agri)
+ *
+ * **Reference:** https://zerodha.com/charges/
+ *
+ * @author  Trading Platform Team
+ *
+ * @version 1.0.0
+ *
+ * @example Calculating equity delivery fees
+ * ```php
+ * $calc = new DhanFeeCalculator();
+ *
+ * $fees = $calc->calculateFees([
+ *     'asset_class' => 'equity',
+ *     'segment' => 'delivery',
+ *     'order_value' => 100000,  // ₹1 lakh
+ *     'side' => 'buy',
+ * ]);
+ *
+ * echo "Total fees: ₹" . $fees['total_fees'];
+ * // Output: Total fees: ₹180.00 (approx)
+ * ```
+ *
+ * @see FeeCalculatorInterface
  */
 class DhanFeeCalculator implements FeeCalculatorInterface
 {
     private const BROKERAGE_FLAT = 20.0; // ₹20 flat
+
     private const BROKERAGE_PERCENTAGE = 0.0003; // 0.03%
+
     private const GST_RATE = 0.18; // 18%
+
     private const SEBI_CHARGES_PER_CRORE = 10.0; // ₹10 per crore
 
     /**
-     * Calculate fees for an order
+     * Calculate total fees for an order.
+     *
+     * Routes to appropriate calculation method based on asset class.
+     * Supports equity, currency, and commodity fee calculations.
+     *
+     * @param  array  $orderData  Order details:
+     *                            - asset_class: 'equity', 'currency', 'commodity'
+     *                            - segment: 'intraday', 'delivery', 'futures', 'options'
+     *                            - order_value: Total order value (quantity × price)
+     *                            - side: 'buy' or 'sell'
+     *                            - commodity_type: 'agri' or 'non-agri' (for commodities)
+     * @return array Fee breakdown with all components
+     *
+     * @throws \InvalidArgumentException If asset class is unsupported
+     *
+     * @example Equity intraday order
+     * ```php
+     * $fees = $calc->calculateFees([
+     *     'asset_class' => 'equity',
+     *     'segment' => 'intraday',
+     *     'order_value' => 50000,
+     *     'side' => 'sell',
+     * ]);
+     * ```
      */
     public function calculateFees(array $orderData): array
     {
@@ -40,7 +102,23 @@ class DhanFeeCalculator implements FeeCalculatorInterface
     }
 
     /**
-     * Estimate pre-trade fees
+     * Estimate pre-trade fees.
+     *
+     * Provides fee estimate before order placement for display in UI
+     * and break-even price calculation.
+     *
+     * @param  string  $instrument  Instrument symbol
+     * @param  float  $quantity  Number of shares/contracts
+     * @param  float  $price  Expected execution price
+     * @param  string  $side  'buy' or 'sell'
+     * @param  string  $segment  'intraday', 'delivery', 'futures', 'options'
+     * @return array Fee estimate with same structure as calculateFees()
+     *
+     * @example Pre-trade fee display
+     * ```php
+     * $estimate = $calc->estimateFees('TCS', 50, 3500, 'buy', 'delivery');
+     * echo "Estimated fees: ₹" . $estimate['total_fees'];
+     * ```
      */
     public function estimateFees(
         string $instrument,
@@ -63,7 +141,31 @@ class DhanFeeCalculator implements FeeCalculatorInterface
     }
 
     /**
-     * Calculate equity fees
+     * Calculate equity-specific fees.
+     *
+     * Handles both intraday and delivery equity trades with appropriate
+     * STT rates and exchange charges.
+     *
+     * **Fee Components:**
+     * - Brokerage: min(₹20, 0.03% of value)
+     * - STT: 0.025% (intraday sell), 0.1% (delivery both sides)
+     * - Exchange charges: 0.00345% (NSE)
+     * - GST: 18% on brokerage + exchange charges
+     * - SEBI: ₹10 per crore
+     * - Stamp duty: 0.015% (buy side only)
+     *
+     * @param  float  $orderValue  Total order value
+     * @param  string  $side  'buy' or 'sell'
+     * @param  string  $segment  'intraday' or 'delivery'
+     * @return array Complete fee breakdown
+     *
+     * @example Intraday vs delivery comparison
+     * ```php
+     * $intradayFees = $this->calculateEquityFees(100000, 'sell', 'intraday');
+     * $deliveryFees = $this->calculateEquityFees(100000, 'buy', 'delivery');
+     * echo "Intraday: ₹{$intradayFees['total_fees']}\n";
+     * echo "Delivery: ₹{$deliveryFees['total_fees']}\n";
+     * ```
      */
     private function calculateEquityFees(float $orderValue, string $side, string $segment): array
     {
@@ -113,7 +215,11 @@ class DhanFeeCalculator implements FeeCalculatorInterface
     }
 
     /**
-     * Calculate currency fees
+     * Calculate currency fees.
+     *
+     * @param  float  $orderValue  Total value of the order.
+     * @param  string  $side  'buy' or 'sell'.
+     * @return array Fee breakdown.
      */
     private function calculateCurrencyFees(float $orderValue, string $side): array
     {
@@ -151,7 +257,12 @@ class DhanFeeCalculator implements FeeCalculatorInterface
     }
 
     /**
-     * Calculate commodity fees
+     * Calculate commodity fees.
+     *
+     * @param  float  $orderValue  Total value of the order.
+     * @param  string  $side  'buy' or 'sell'.
+     * @param  string  $commodityType  'processed' or 'non-agri'.
+     * @return array Fee breakdown.
      */
     private function calculateCommodityFees(float $orderValue, string $side, string $commodityType): array
     {
@@ -197,7 +308,9 @@ class DhanFeeCalculator implements FeeCalculatorInterface
     }
 
     /**
-     * Get supported asset classes
+     * Get supported asset classes.
+     *
+     * @return array List of supported asset classes.
      */
     public function getSupportedAssetClasses(): array
     {

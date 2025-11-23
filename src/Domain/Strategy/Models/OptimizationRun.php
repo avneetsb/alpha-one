@@ -6,6 +6,64 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
+/**
+ * Class OptimizationRun
+ *
+ * Tracks a complete hyperparameter optimization run using genetic algorithms.
+ * Manages generations, evaluations, fitness tracking, and best configuration selection.
+ *
+ * **Optimization Process:**
+ * 1. Initialize population with random hyperparameters
+ * 2. Evaluate fitness via backtesting
+ * 3. Select elite individuals (best performers)
+ * 4. Apply crossover and mutation to create new generation
+ * 5. Repeat for N generations
+ * 6. Return best configuration found
+ *
+ * **Algorithms Supported:**
+ * - 'genetic': Standard genetic algorithm
+ * - 'differential_evolution': DE optimization
+ * - 'particle_swarm': PSO optimization
+ * - 'grid_search': Exhaustive grid search
+ * - 'random_search': Random sampling
+ *
+ * **Fitness Objectives:**
+ * - Single: Maximize Sharpe ratio
+ * - Multi: Maximize return + minimize drawdown
+ * - Custom: Weighted combination of metrics
+ *
+ * **Status Values:**
+ * - 'pending': Not started
+ * - 'running': Currently executing
+ * - 'completed': Successfully finished
+ * - 'failed': Error occurred
+ * - 'cancelled': Manually stopped
+ *
+ * @author  Trading Platform Team
+ *
+ * @version 1.0.0
+ *
+ * @example Starting an optimization run
+ * ```php
+ * $run = OptimizationRun::create([
+ *     'strategy_id' => 1,
+ *     'name' => 'RSI Optimization Q1 2024',
+ *     'algorithm' => 'genetic',
+ *     'optimization_config' => [
+ *         'population_size' => 50,
+ *         'elite_size' => 5,
+ *         'mutation_rate' => 0.1,
+ *         'crossover_rate' => 0.8,
+ *     ],
+ *     'fitness_objectives' => ['sharpe_ratio' => 0.7, 'max_drawdown' => 0.3],
+ *     'total_generations' => 50,
+ *     'data_period_start' => '2024-01-01',
+ *     'data_period_end' => '2024-03-31',
+ * ]);
+ *
+ * $run->markAsStarted();
+ * ```
+ */
 class OptimizationRun extends Model
 {
     protected $fillable = [
@@ -136,6 +194,7 @@ class OptimizationRun extends Model
         if ($this->total_generations == 0) {
             return 0.0;
         }
+
         return ($this->current_generation / $this->total_generations) * 100;
     }
 
@@ -144,11 +203,12 @@ class OptimizationRun extends Model
      */
     public function getDurationSeconds(): ?int
     {
-        if (!$this->started_at) {
+        if (! $this->started_at) {
             return null;
         }
 
         $endTime = $this->completed_at ?? now();
+
         return $this->started_at->diffInSeconds($endTime);
     }
 

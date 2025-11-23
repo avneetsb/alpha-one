@@ -5,17 +5,21 @@ namespace TradingPlatform\Application\Workers;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
-use TradingPlatform\Infrastructure\Logger\LoggerService;
 use TradingPlatform\Infrastructure\Cache\RedisAdapter;
+use TradingPlatform\Infrastructure\Logger\LoggerService;
 
 class LoggingWorkerCommand extends Command
 {
     protected static $defaultName = 'cli:workers:logging';
+
     private const BATCH_INTERVAL_MS = 1000; // 1 second as per requirements
+
     private const MAX_BATCH_SIZE = 100;
+
     private const LOG_QUEUE_KEY = 'queue:logs:pending';
-    
+
     private \Monolog\Logger $logger;
+
     private RedisAdapter $redis;
 
     public function __construct()
@@ -29,19 +33,19 @@ class LoggingWorkerCommand extends Command
     {
         $this->setDescription('Background worker for async log processing and batching')
             ->setHelp(
-                "Usage:\n" .
-                "  php bin/console cli:workers:logging\n\n" .
-                "Behavior:\n" .
-                "  Reads from Redis queue '" . self::LOG_QUEUE_KEY . "' and flushes batched logs to DB.\n" .
-                "  Batch interval: " . self::BATCH_INTERVAL_MS . "ms; Max batch size: " . self::MAX_BATCH_SIZE . ".\n"
+                "Usage:\n".
+                "  php bin/console cli:workers:logging\n\n".
+                "Behavior:\n".
+                "  Reads from Redis queue '".self::LOG_QUEUE_KEY."' and flushes batched logs to DB.\n".
+                '  Batch interval: '.self::BATCH_INTERVAL_MS.'ms; Max batch size: '.self::MAX_BATCH_SIZE.".\n"
             );
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $output->writeln('Starting async logging worker...');
-        $output->writeln('Batch interval: ' . self::BATCH_INTERVAL_MS . 'ms');
-        $output->writeln('Max batch size: ' . self::MAX_BATCH_SIZE);
+        $output->writeln('Batch interval: '.self::BATCH_INTERVAL_MS.'ms');
+        $output->writeln('Max batch size: '.self::MAX_BATCH_SIZE);
 
         $batchStartTime = microtime(true);
         $logBatch = [];
@@ -52,7 +56,7 @@ class LoggingWorkerCommand extends Command
                 $elapsed = (microtime(true) - $batchStartTime) * 1000;
                 $shouldFlush = $elapsed >= self::BATCH_INTERVAL_MS || count($logBatch) >= self::MAX_BATCH_SIZE;
 
-                if ($shouldFlush && !empty($logBatch)) {
+                if ($shouldFlush && ! empty($logBatch)) {
                     $this->flushBatch($logBatch);
                     $logBatch = [];
                     $batchStartTime = microtime(true);
@@ -60,7 +64,7 @@ class LoggingWorkerCommand extends Command
 
                 // Fetch log from queue (non-blocking with timeout)
                 $logData = $this->redis->getClient()->brpop([self::LOG_QUEUE_KEY], 0.1);
-                
+
                 if ($logData) {
                     $logEntry = json_decode($logData[1], true);
                     if ($logEntry) {
@@ -72,7 +76,7 @@ class LoggingWorkerCommand extends Command
                 usleep(10000); // 10ms
 
             } catch (\Exception $e) {
-                $output->writeln('<error>Error in logging worker: ' . $e->getMessage() . '</error>');
+                $output->writeln('<error>Error in logging worker: '.$e->getMessage().'</error>');
                 // Continue processing
             }
         }
@@ -83,7 +87,7 @@ class LoggingWorkerCommand extends Command
     private function flushBatch(array $logBatch): void
     {
         $startTime = microtime(true);
-        
+
         try {
             // Write to database in single transaction
             \Illuminate\Database\Capsule\Manager::transaction(function () use ($logBatch) {
@@ -106,13 +110,13 @@ class LoggingWorkerCommand extends Command
             }
 
             $duration = (microtime(true) - $startTime) * 1000;
-            
+
             // SLO check: p95 should be ≤ 500ms, p99 ≤ 1s
             if ($duration > 500) {
                 $this->logger->warning('Slow log batch flush', [
                     'duration_ms' => $duration,
                     'batch_size' => count($logBatch),
-                    'slo_breach' => true
+                    'slo_breach' => true,
                 ]);
             }
 
@@ -120,9 +124,9 @@ class LoggingWorkerCommand extends Command
             // Fallback to console logging
             $this->logger->error('Failed to flush log batch to database', [
                 'error' => $e->getMessage(),
-                'batch_size' => count($logBatch)
+                'batch_size' => count($logBatch),
             ]);
-            
+
             // Write critical logs to console
             foreach ($logBatch as $logEntry) {
                 if ($logEntry['level'] === 'ERROR' || $logEntry['level'] === 'CRITICAL') {

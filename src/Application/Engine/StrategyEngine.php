@@ -2,10 +2,10 @@
 
 namespace TradingPlatform\Application\Engine;
 
-use TradingPlatform\Domain\Strategy\Strategy;
-use TradingPlatform\Domain\Strategy\Signal;
-use TradingPlatform\Domain\MarketData\Tick;
 use TradingPlatform\Domain\MarketData\Candle;
+use TradingPlatform\Domain\MarketData\Tick;
+use TradingPlatform\Domain\Strategy\Signal;
+use TradingPlatform\Domain\Strategy\Strategy;
 use TradingPlatform\Infrastructure\Logger\LoggerService;
 
 /**
@@ -15,7 +15,6 @@ use TradingPlatform\Infrastructure\Logger\LoggerService;
  * Collects signals from strategies and hands them off for order placement.
  * Provides robust error handling and logging for operational observability.
  *
- * @package TradingPlatform\Application\Engine
  * @version 1.0.0
  *
  * @example Register and process:
@@ -26,6 +25,7 @@ class StrategyEngine
 {
     /** @var Strategy[] */
     private array $strategies = [];
+
     private $logger;
 
     public function __construct()
@@ -35,15 +35,19 @@ class StrategyEngine
 
     /**
      * Register a strategy for subsequent event processing.
+     *
+     * @param  Strategy  $strategy  Strategy instance to register.
      */
     public function registerStrategy(Strategy $strategy): void
     {
         $this->strategies[$strategy->getName()] = $strategy;
-        $this->logger->info("Registered strategy: " . $strategy->getName());
+        $this->logger->info('Registered strategy: '.$strategy->getName());
     }
 
     /**
      * Process a market tick across all registered strategies.
+     *
+     * @param  Tick  $tick  Market tick to process.
      */
     public function processTick(Tick $tick): void
     {
@@ -54,13 +58,15 @@ class StrategyEngine
                     $this->handleSignal($signal);
                 }
             } catch (\Exception $e) {
-                $this->logger->error("Error in strategy {$strategy->getName()} onTick: " . $e->getMessage());
+                $this->logger->error("Error in strategy {$strategy->getName()} onTick: ".$e->getMessage());
             }
         }
     }
 
     /**
      * Process a completed candle across all registered strategies.
+     *
+     * @param  Candle  $candle  Completed candle to process.
      */
     public function processCandle(Candle $candle): void
     {
@@ -71,7 +77,7 @@ class StrategyEngine
                     $this->handleSignal($signal);
                 }
             } catch (\Exception $e) {
-                $this->logger->error("Error in strategy {$strategy->getName()} onCandle: " . $e->getMessage());
+                $this->logger->error("Error in strategy {$strategy->getName()} onCandle: ".$e->getMessage());
             }
         }
     }
@@ -79,11 +85,13 @@ class StrategyEngine
     /**
      * Handle a generated trading signal.
      * In production, dispatches a job to place/cancel/modify orders.
+     *
+     * @param  Signal  $signal  Trading signal to handle.
      */
     private function handleSignal(Signal $signal): void
     {
         $this->logger->info("SIGNAL GENERATED: {$signal->action} {$signal->instrumentId} @ {$signal->price} by {$signal->strategyName}");
-        
+
         // Here we would dispatch an OrderPlacementJob or similar
         // For now, we just log it.
         // QueueService::getConnection()->push(new PlaceOrderJob($signal));

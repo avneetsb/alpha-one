@@ -10,10 +10,15 @@ class BinaryPacketParser
 {
     // Feed response codes from Dhan API
     private const TICKER_PACKET = 2;
+
     private const QUOTE_PACKET = 4;
+
     private const OI_PACKET = 5;
+
     private const PREV_CLOSE_PACKET = 6;
+
     private const FULL_PACKET = 8;
+
     private const DISCONNECT_PACKET = 50;
 
     /**
@@ -27,9 +32,9 @@ class BinaryPacketParser
 
         // Parse header (8 bytes)
         $header = $this->parseHeader(substr($binaryData, 0, 8));
-        
+
         // Parse payload based on feed type
-        $payload = match($header['feed_code']) {
+        $payload = match ($header['feed_code']) {
             self::TICKER_PACKET => $this->parseTickerPacket($binaryData),
             self::QUOTE_PACKET => $this->parseQuotePacket($binaryData),
             self::OI_PACKET => $this->parseOIPacket($binaryData),
@@ -53,13 +58,13 @@ class BinaryPacketParser
     {
         // Byte 1: Feed response code
         $feedCode = unpack('C', $data[0])[1];
-        
+
         // Bytes 2-3: Message length (int16)
         $messageLength = unpack('v', substr($data, 1, 2))[1];
-        
+
         // Byte 4: Exchange segment
         $exchangeSegment = unpack('C', $data[3])[1];
-        
+
         // Bytes 5-8: Security ID (int32)
         $securityId = unpack('V', substr($data, 4, 4))[1];
 
@@ -189,7 +194,7 @@ class BinaryPacketParser
 
         for ($i = 0; $i < 5; $i++) {
             $levelOffset = $depthOffset + ($i * 20);
-            
+
             $result['market_depth'][] = [
                 'bid_qty' => unpack('V', substr($data, $levelOffset, 4))[1],
                 'ask_qty' => unpack('V', substr($data, $levelOffset + 4, 4))[1],
@@ -222,7 +227,7 @@ class BinaryPacketParser
 
     private function getDisconnectReason(int $code): string
     {
-        return match($code) {
+        return match ($code) {
             805 => 'Maximum WebSocket connections exceeded (5)',
             800 => 'Invalid token or client ID',
             801 => 'Token expired',
@@ -238,8 +243,8 @@ class BinaryPacketParser
     {
         // This requires: spot price, strike, volatility, time to expiry, risk-free rate
         // Simplified placeholder - full implementation would use Black-Scholes
-        
-        if (!isset($optionData['spot'], $optionData['strike'], $optionData['volatility'])) {
+
+        if (! isset($optionData['spot'], $optionData['strike'], $optionData['volatility'])) {
             return [];
         }
 

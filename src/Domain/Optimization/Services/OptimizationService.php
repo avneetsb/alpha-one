@@ -2,21 +2,44 @@
 
 namespace TradingPlatform\Domain\Optimization\Services;
 
-use TradingPlatform\Domain\Optimization\Models\OptimizationRun;
 use TradingPlatform\Domain\Backtesting\Services\BacktestSimulator;
+use TradingPlatform\Domain\Optimization\Models\OptimizationRun;
 use TradingPlatform\Domain\Strategy\Services\StrategyFactory;
 
+/**
+ * Class OptimizationService
+ *
+ * Manages the execution of strategy optimization jobs.
+ */
 class OptimizationService
 {
+    /**
+     * @var BacktestSimulator The backtest simulator.
+     */
     private BacktestSimulator $backtester;
+
+    /**
+     * @var StrategyFactory The strategy factory.
+     */
     private StrategyFactory $strategyFactory;
 
+    /**
+     * OptimizationService constructor.
+     */
     public function __construct(BacktestSimulator $backtester, StrategyFactory $strategyFactory)
     {
         $this->backtester = $backtester;
         $this->strategyFactory = $strategyFactory;
     }
 
+    /**
+     * Start a new optimization job.
+     *
+     * @param  string  $strategyName  The name of the strategy to optimize.
+     * @param  string  $algorithm  The optimization algorithm ('grid', 'random').
+     * @param  array  $parameterSpace  The parameter space to search.
+     * @return OptimizationRun The created optimization run model.
+     */
     public function startOptimization(string $strategyName, string $algorithm, array $parameterSpace): OptimizationRun
     {
         $job = OptimizationRun::create([
@@ -28,10 +51,15 @@ class OptimizationService
         ]);
 
         // dispatch(new RunOptimizationJob($job->id));
-        
+
         return $job;
     }
 
+    /**
+     * Execute an optimization job.
+     *
+     * @param  OptimizationRun  $job  The optimization run model.
+     */
     public function runJob(OptimizationRun $job): void
     {
         $job->update(['status' => 'running']);
@@ -57,6 +85,11 @@ class OptimizationService
         }
     }
 
+    /**
+     * Run a grid search optimization.
+     *
+     * @return array Best result found.
+     */
     private function runGridSearch(OptimizationRun $job): array
     {
         $space = $job->optimization_config['parameter_space'];
@@ -66,7 +99,7 @@ class OptimizationService
 
         foreach ($combinations as $params) {
             $metric = $this->evaluateParams($job->strategy_name, $params);
-            
+
             if ($metric > $bestMetric) {
                 $bestMetric = $metric;
                 $bestResult = ['params' => $params, 'metric' => $metric];
@@ -76,6 +109,11 @@ class OptimizationService
         return $bestResult;
     }
 
+    /**
+     * Run a random search optimization.
+     *
+     * @return array Best result found.
+     */
     private function runRandomSearch(OptimizationRun $job): array
     {
         $space = $job->optimization_config['parameter_space'];
@@ -86,7 +124,7 @@ class OptimizationService
         for ($i = 0; $i < $iterations; $i++) {
             $params = $this->randomParams($space);
             $metric = $this->evaluateParams($job->strategy_name, $params);
-            
+
             if ($metric > $bestMetric) {
                 $bestMetric = $metric;
                 $bestResult = ['params' => $params, 'metric' => $metric];
@@ -96,6 +134,11 @@ class OptimizationService
         return $bestResult;
     }
 
+    /**
+     * Evaluate a set of parameters for a strategy.
+     *
+     * @return float The performance metric (e.g., Sharpe Ratio).
+     */
     private function evaluateParams(string $strategyName, array $params): float
     {
         // Mock evaluation
@@ -106,6 +149,9 @@ class OptimizationService
         return rand(0, 100) / 10.0; // Mock Sharpe Ratio 0.0 - 10.0
     }
 
+    /**
+     * Generate all combinations of parameters for grid search.
+     */
     private function generateCombinations(array $arrays): array
     {
         $result = [[]];
@@ -118,15 +164,20 @@ class OptimizationService
             }
             $result = $tmp;
         }
+
         return $result;
     }
 
+    /**
+     * Generate random parameters from the space.
+     */
     private function randomParams(array $space): array
     {
         $params = [];
         foreach ($space as $key => $values) {
             $params[$key] = $values[array_rand($values)];
         }
+
         return $params;
     }
 }

@@ -11,21 +11,37 @@ use Illuminate\Database\Eloquent\Model;
  * name is dynamic (e.g., `candles_1m`, `candles_5m`) and should be set via
  * `setTable` for the desired timeframe.
  *
- * @package TradingPlatform\Domain\MarketData
  * @version 1.0.0
  *
  * @example Load 5m candles:
  * $candle = (new Candle())->setTable('candles_5m')->find($id);
+ *
+ * @property int $instrument_id
+ * @property \DateTime $ts
+ * @property float $open
+ * @property float $high
+ * @property float $low
+ * @property float $close
+ * @property int $volume
+ * @property int $oi
  */
 class Candle extends Model
 {
     // Table name is dynamic based on interval, so we might need a factory or setTable
     protected $guarded = [];
+
     public $timestamps = false;
 
+    /**
+     * Set the table associated with the model.
+     *
+     * @param  string  $table
+     * @return $this
+     */
     public function setTable($table)
     {
         $this->table = $table;
+
         return $this;
     }
 
@@ -45,8 +61,9 @@ class Candle extends Model
      */
     public static function fromArray(array $data): self
     {
-        $candle = new self();
+        $candle = new self;
         $candle->fill($data);
+
         return $candle;
     }
 }

@@ -2,16 +2,14 @@
 
 namespace TradingPlatform\Domain\Margin\Services;
 
-use TradingPlatform\Domain\Exchange\Models\Instrument;
 use TradingPlatform\Domain\Portfolio\Models\Position;
 
 class CrossMarginService
 {
     /**
      * Calculate margin with cross-margining offsets
-     * 
-     * @param Position[] $positions
-     * @return array
+     *
+     * @param  Position[]  $positions
      */
     public function calculatePortfolioMargin(array $positions): array
     {
@@ -39,7 +37,7 @@ class CrossMarginService
         return [
             'total_margin' => $totalMargin,
             'cross_margin_benefit' => $benefit,
-            'details' => $grouped
+            'details' => $grouped,
         ];
     }
 
@@ -62,7 +60,7 @@ class CrossMarginService
             'total_used' => $totalUsed,
             'total_available' => $totalAvailable,
             'utilization_pct' => $totalAvailable > 0 ? ($totalUsed / $totalAvailable) * 100 : 0,
-            'breakdown' => $details
+            'breakdown' => $details,
         ];
     }
 
@@ -71,9 +69,10 @@ class CrossMarginService
         $groups = [];
         foreach ($positions as $pos) {
             // Assuming symbol format like 'NIFTY23OCT...'
-            $underlying = preg_replace('/\d+.*$/', '', $pos->symbol); 
+            $underlying = preg_replace('/\d+.*$/', '', $pos->symbol);
             $groups[$underlying][] = $pos;
         }
+
         return $groups;
     }
 
@@ -86,8 +85,12 @@ class CrossMarginService
         $sumMargin = 0.0;
 
         foreach ($positions as $pos) {
-            if ($pos->quantity > 0) $hasLong = true;
-            if ($pos->quantity < 0) $hasShort = true;
+            if ($pos->quantity > 0) {
+                $hasLong = true;
+            }
+            if ($pos->quantity < 0) {
+                $hasShort = true;
+            }
             $sumMargin += $pos->margin_required;
         }
 

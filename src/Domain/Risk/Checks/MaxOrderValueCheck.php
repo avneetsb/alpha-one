@@ -2,8 +2,8 @@
 
 namespace TradingPlatform\Domain\Risk\Checks;
 
-use TradingPlatform\Domain\Risk\RiskCheck;
 use TradingPlatform\Domain\Order\Order;
+use TradingPlatform\Domain\Risk\RiskCheck;
 
 class MaxOrderValueCheck implements RiskCheck
 {
@@ -16,7 +16,7 @@ class MaxOrderValueCheck implements RiskCheck
 
     public function getName(): string
     {
-        return "Max Order Value Check";
+        return 'Max Order Value Check';
     }
 
     public function check(Order $order): void
